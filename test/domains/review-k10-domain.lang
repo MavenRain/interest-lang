@@ -1,0 +1,24 @@
+-- Ten nullary decisions exercise verdict encoding above a single digit.
+mu Decision : Type 0 :=
+  | d0 : Decision
+  | d1 : Decision
+  | d2 : Decision
+  | d3 : Decision
+  | d4 : Decision
+  | d5 : Decision
+  | d6 : Decision
+  | d7 : Decision
+  | d8 : Decision
+  | d9 : Decision
+
+mu Ballots : Type 0 :=
+  | bnil : Ballots
+  | bcons (head : Decision) (tail : Ballots) : Ballots
+
+mu EqNat : (0 a : Nat) -> (0 b : Nat) -> Type 0 :=
+  | reflNat : (0 x : Nat) -> EqNat x x
+
+mu Config : Type 0 :=
+  | mkConfig (xs : Ballots) (proof : EqNat 1 1) : Config
+
+def ChoiceRule : Type 0 := Config -> Decision

@@ -1,0 +1,86 @@
+# interest-lang status
+
+The build implements milestones M0 to M3 of `SPEC.md` (slices I1 to I5,
+2026-10-08). `interestc` checks a program, gives the verdict table of its
+constitution, gives its program data and writes an EVM contract with the
+entries of SPEC section 7. The reference model `test/claims.py` agrees with
+geth on operation sequences and on the law vectors of milestone M2. No
+milestone of SPEC section 10 is open.
+
+## Implemented
+
+- The prelude claim algebra of SPEC sections 4 and 5 in
+  `domain/domain.lang`: `Measure`, `credit`, `debit`, `mass`, `transfer`,
+  `deposit`, `distribute`, `withdraw`, `attest`, `amendState`, the
+  restriction R and the waterfall W. The examples prove the laws by refl
+  (slice I2).
+- The domain refusals of SPEC section 2: a program cannot redefine a
+  prelude name (no mint, burn, charter write or floor payout of its own),
+  declare a `mu` family or `def rec`, or use a contract form such as
+  `storage`, `entry` or `payable` (`test/refusal.sh`; slice I2).
+- The Nat built-ins `natMul`, `natDiv` and `natMod` next to `natAdd`,
+  `natSub`, `natEq` and `natLt`.
+- The program data of SPEC section 7: the defs `start`, `genesis`,
+  `restrict`, `waterfall` and `issuers`, read by name and type, and the
+  verb `interestc data` (slice I3).
+- The contract entries of SPEC section 7 in `domain/entries.c`:
+  `deposit`, `distribute`, `withdraw`, `transfer`, `attest`, `cast`,
+  `amend` and the views `mass`, `supply`, `claimOf`, `charter`, `reserve`,
+  `selfConstituting`. The creation code writes the genesis storage
+  (slice I3).
+- The reference model and the differential test `test/claims.py`:
+  operation sequences, the law vectors and the contract checks (slice I4).
+- Three examples: a Debreu charter vote, a labelled-constitution
+  impossibility and an ERC-721 Dirac measure with S = 1 (slice I5).
+
+## Remaining work
+
+1. Apply `docs/KIT-DEBT.md` to lang-template. It needs a lang-template
+   slice with its own gate.
+2. The first commit of this tree.
+
+## Known limits
+
+- Arrow-Debreu takes at most 14 members at k = 3 and 6 members at k = 4.
+  Cause: `amend` packs the code of each tally in one 256-bit word
+  (`EVM_LIMIT`).
+- The plurality rule at 1000 members fills the 256 MiB arena (`MEMORY`)
+  before `TABLE_LIMIT`. Cause: a run has one arena, and `table` evaluates
+  the rule at each of the 501501 tallies (`probe/CAPABILITY.md`, section 6).
+- The checker stops at depth 4096 and at 2^24 steps for each declaration
+  (`TYPE_FUEL`). Cause: it evaluates by C recursion on an 8 MB stack.
+- `Nat` in the checker is a 64-bit word (`TYPE_NAT` on an overflow). The
+  contract computes with 256-bit words and reverts on a wrap.
+- At most 32 genesis rows, 4 profiles and 2 payment kinds
+  (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS` in `src/evm.h`).
+- `withdraw` keeps NUM mod S for the identity, so a part of a wei can stay
+  in the contract. `distribute` and `withdraw` are open to all callers, and
+  `withdraw` pays the calling wallet.
+- The gate runs each call with geth `evm run`, which charges no gas. Thus
+  the gate does not measure gas.
+- The ERC-721 example gives the ownership model of ERC-721, not its ABI:
+  SPEC section 2 refuses `balanceOf`, `approve` and `transferFrom`.
+
+## Internal boundaries
+
+The front end (`src/lexer.c`, `src/parser.c`, `src/printer.c`,
+`src/arena.c`, `src/diag.c`) parses and prints a program.
+`test/parse.sh` checks the printer round trip of the prelude, the three
+examples and `test/parser-arms.lang`.
+
+The checker (`src/check.c`) evaluates by normalization by evaluation. It
+reads the embedded prelude (`gen/embed.c`), gives the verbs `check`,
+`table`, `verdicts`, `eval` and `data`, and refuses the forms of SPEC
+section 2. `test/check.sh`, `test/refusal.sh`, `test/normal-forms.py` and
+`test/domains.sh` check it.
+
+The EVM writer core (`src/evm.c`, `src/asm.h`, `src/keccak.c`) writes the
+dispatcher, the verdict table and `cast`. `test/differential.py` checks
+`cast` and `amend` against `interestc verdicts` in geth.
+
+The domain (`domain/domain.lang`, `domain/entries.c`) gives the prelude,
+the entries and the two hooks `lang_domain_genesis` and
+`lang_domain_data`. `test/settlement.py` checks each entry in geth, and
+`test/claims.py` checks operation sequences against the reference model.
+A program cannot use `mu` families, `def rec`, `nu`, `axiom` or the
+contract forms; storage is reached only through the entries.

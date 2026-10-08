@@ -1,0 +1,89 @@
+def members : Nat := 3
+-- ERC-721 as a Dirac measure (host README, The domain).  The supply S is 1:
+-- one unit, at one identity, that moves whole.  The ownership model of
+-- ERC-721 and not its ABI: mass h = 1 tells the owner.  The regime is
+-- Arrow-Debreu (transfer is an Arrow-Debreu entry).
+-- `H` is a veto rule: one frozen ballot freezes the token; else
+-- `restricted` wins only by a strict majority over `open`.  `c` is the
+-- count triple (open, restricted, frozen).
+def veto : T3 -> Charter := fun (c : T3) =>
+  case natLt 0 c.1.1 with
+  | 0 (u : prod ()) =>
+    (case natLt c.0 c.1.0 with
+     | 0 (v : prod ()) => open
+     | 1 (v : prod ()) => restricted)
+  | 1 (u : prod ()) => frozen
+def H : Tally -> Charter := fun (t : Tally) => veto (counts t)
+
+def F : ChoiceRule := fun (x : Config) => H (orbit x)
+def agg : Aggregation F := mkAgg F H (fun (x : Config) => reflDec (H (orbit x)))
+def selfF : IsSelfConstituting F := selfConstitutes F agg
+
+-- cast: one frozen ballot gives frozen, and two configurations in one
+-- orbit give one verdict.
+def xs : Ballots := bcons open (bcons frozen (bcons open bnil))
+def x : Config := mkConfig xs (reflNat 3)
+def ys : Ballots := bcons frozen (bcons open (bcons open bnil))
+def y : Config := mkConfig ys (reflNat 3)
+def vetoX : EqDec (gov F agg x) frozen := reflDec frozen
+def castXY : EqDec (gov F agg x) (gov F agg y) := castOrbit F agg x y (reflTally (orbit x))
+
+-- The Dirac measure: the one unit is at identity 1.
+def m1 : Measure := credit empty 1 1
+def ownerOne : EqNat (mass m1 1) 1 := reflNat 1
+def ownerTwo : EqNat (mass m1 2) 0 := reflNat 0
+
+-- `restrict` gives the restriction of each charter: `open` admits any
+-- amount, `restricted` admits a transfer to an accredited receiver only,
+-- `frozen` admits nothing.  Identity 2 is foreign accredited, each other
+-- identity is domestic retail.
+def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
+  match c as w in Charter return Cap with
+  | open => any
+  | restricted => (match r.1 as v in Status return Cap with
+    | retail => deny
+    | accredited => any)
+  | frozen => deny
+def prof : Profiles := fun (h : Identity) =>
+  case natEq h 2 with
+  | 0 (u : prod ()) => tuple (domestic, retail)
+  | 1 (u : prod ()) => tuple (foreign, accredited)
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 0))
+def s0 : InterestState := tuple (m1, tuple (open, t0))
+def stateOr : InterestState -> Option InterestState -> InterestState :=
+  fun (d : InterestState) (o : Option InterestState) =>
+    case o with
+    | 0 (u : prod ()) => d
+    | 1 (t : InterestState) => t
+
+-- transfer moves the whole unit from identity 1 to identity 2: the measure
+-- stays a Dirac measure.
+def e1 : Le 1 (mass s0.0 1) := (0, reflNat 1)
+def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 1 s0 e1)
+def transferMoves : EqNat (mass s1.0 2) 1 := reflNat 1
+def transferLeaves : EqNat (mass s1.0 1) 0 := reflNat 0
+
+-- The restricted charter admits the transfer to identity 2 (accredited)
+-- and not the transfer to identity 3 (retail): the fallback s0 keeps the
+-- unit at identity 1.
+def sR : InterestState := tuple (m1, tuple (restricted, t0))
+def restrictedAccredited : EqNat (mass (stateOr s0 (transfer restrict prof 1 2 1 sR e1)).0 2) 1 := reflNat 1
+def restrictedRetail : EqNat (mass (stateOr s0 (transfer restrict prof 1 3 1 sR e1)).0 1) 1 := reflNat 1
+
+-- The program data of the contract (SPEC section 7): the start charter, the
+-- genesis rows (one unit, so S = 1), the waterfall and the trusted issuers.
+-- `restrict` is above.
+def start : Charter := open
+def genesis : Holders :=
+  hrow 4096 1 (tuple (domestic, retail)) 1
+    (hrow 4097 2 (tuple (foreign, accredited)) 0 (hrow 4098 3 (tuple (domestic, retail)) 0 hnil))
+def waterfall : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
+  match c as w in Charter return Gate with
+  | open => pass
+  | restricted => pass
+  | frozen => retain
+def issuers : Charter -> Identity -> Option (prod ()) := fun (c : Charter) (h : Identity) =>
+  match c as w in Charter return Option (prod ()) with
+  | open => natEq h 1
+  | restricted => natEq h 1
+  | frozen => none (prod ())

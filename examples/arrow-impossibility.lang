@@ -1,0 +1,26 @@
+def members : Nat := 3
+-- Arrow-impossibility regime (host README, The domain).  The constitution reads
+-- member position 0, so it is not constant on orbits and the program can
+-- write no aggregation.  Thus it uses the measure only.
+def first : ChoiceRule := fun (x : Config) =>
+  foldBallots Charter (fun (b : Ballot) (r : Charter) => b) frozen (ballots x)
+
+-- Two configurations in one orbit with two verdicts.
+def xs : Ballots := bcons open (bcons restricted (bcons frozen bnil))
+def x : Config := mkConfig xs (reflNat 3)
+def ys : Ballots := bcons restricted (bcons open (bcons frozen bnil))
+def y : Config := mkConfig ys (reflNat 3)
+def sameOrbit : EqTally (orbit x) (orbit y) := reflTally (orbit x)
+def firstX : EqDec (first x) open := reflDec open
+def firstY : EqDec (first y) restricted := reflDec restricted
+
+-- Scenario (refl candidates): 5 units go to identity 1.
+def m1 : Measure := credit empty 1 5
+def massOne : EqNat (mass m1 1) 5 := reflNat 5
+def massTwo : EqNat (mass m1 2) 0 := reflNat 0
+
+-- The program data (SPEC section 7): no restrict and no waterfall (the
+-- defaults deny and retain); identity 1 is the trusted issuer.
+def start : Charter := open
+def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 5 (hrow 4097 2 (tuple (domestic, retail)) 0 hnil)
+def issuers : Charter -> Identity -> Option (prod ()) := fun (c : Charter) (h : Identity) => natEq h 1

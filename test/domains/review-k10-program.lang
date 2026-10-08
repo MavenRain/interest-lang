@@ -1,0 +1,2 @@
+def members : Nat := 1
+def F : ChoiceRule := fun (x : Config) => d9

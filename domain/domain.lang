@@ -1,0 +1,488 @@
+-- The prelude of interest-lang (SPEC sections 4 and 5) on the tcc-evm-dao kit.
+-- The target file holds `def members : Nat := N`, this prelude, the program
+-- and the contract, in that order (host README, The domain).  Each `-- @section`
+-- line starts one section, so a check of each prefix finds the first bad
+-- section.  Equality is one `mu` family per index type and each list is one
+-- `mu` family per element type: a constructor of a family with a parameter
+-- cannot appear in a term (host CAPABILITY.md, Kernel).  Each constructor
+-- takes its index explicitly (`reflNat 2`).
+
+-- @section 1 Charter
+mu Charter : Type 0 :=
+  | open : Charter
+  | restricted : Charter
+  | frozen : Charter
+
+def decide : (0 B : Type 0) -> B -> B -> B -> Charter -> B :=
+  fun (0 B : Type 0) (r : B) (f : B) (h : B) (d : Charter) =>
+    match d as w in Charter return B with
+    | open => r
+    | restricted => f
+    | frozen => h
+
+def Ballot : Type 0 := Charter
+
+-- @section 2 Equality on Nat and on Charter
+mu EqNat : (0 a : Nat) -> (0 b : Nat) -> Type 0 :=
+  | reflNat : (0 x : Nat) -> EqNat x x
+
+def transportNat : (0 P : Nat -> Type 0) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> P x -> P y :=
+  fun (0 P : Nat -> Type 0) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return P i -> P j with
+    | reflNat 0 z => fun (p : P z) => p
+
+def symmNat : (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqNat y x :=
+  fun (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqNat j i with
+    | reflNat 0 z => reflNat z
+
+def transNat : (0 x : Nat) -> (0 y : Nat) -> (0 z : Nat) -> EqNat x y -> EqNat y z -> EqNat x z :=
+  fun (0 x : Nat) (0 y : Nat) (0 z : Nat) (e1 : EqNat x y) (e2 : EqNat y z) =>
+    transportNat (fun (w : Nat) => EqNat x w) y z e2 e1
+
+def congNat : (f : Nat -> Nat) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqNat (f x) (f y) :=
+  fun (f : Nat -> Nat) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqNat (f i) (f j) with
+    | reflNat 0 z => reflNat (f z)
+
+mu EqDec : (0 a : Charter) -> (0 b : Charter) -> Type 0 :=
+  | reflDec : (0 d : Charter) -> EqDec d d
+
+def transportDec : (0 P : Charter -> Type 0) -> (0 x : Charter) -> (0 y : Charter) -> EqDec x y -> P x -> P y :=
+  fun (0 P : Charter -> Type 0) (0 x : Charter) (0 y : Charter) (e : EqDec x y) =>
+    match e as q in EqDec i j return P i -> P j with
+    | reflDec 0 z => fun (p : P z) => p
+
+def symmDec : (0 x : Charter) -> (0 y : Charter) -> EqDec x y -> EqDec y x :=
+  fun (0 x : Charter) (0 y : Charter) (e : EqDec x y) =>
+    match e as q in EqDec i j return EqDec j i with
+    | reflDec 0 z => reflDec z
+
+def transDec : (0 x : Charter) -> (0 y : Charter) -> (0 z : Charter) -> EqDec x y -> EqDec y z -> EqDec x z :=
+  fun (0 x : Charter) (0 y : Charter) (0 z : Charter) (e1 : EqDec x y) (e2 : EqDec y z) =>
+    transportDec (fun (w : Charter) => EqDec x w) y z e2 e1
+
+def congDec : (f : Charter -> Charter) -> (0 x : Charter) -> (0 y : Charter) -> EqDec x y -> EqDec (f x) (f y) :=
+  fun (f : Charter -> Charter) (0 x : Charter) (0 y : Charter) (e : EqDec x y) =>
+    match e as q in EqDec i j return EqDec (f i) (f j) with
+    | reflDec 0 z => reflDec (f z)
+
+def congND : (f : Nat -> Charter) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqDec (f x) (f y) :=
+  fun (f : Nat -> Charter) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqDec (f i) (f j) with
+    | reflNat 0 z => reflDec (f z)
+
+-- @section 3 Option and Sum
+-- Generic type functions over the built-in `sum`.  Leg 0 of `Option A` is
+-- none and leg 1 is some.  A test is `A -> Option (prod ())`: leg 1 keeps,
+-- as leg 1 of `natEq` and `natLt` is true.
+def Option : Type 0 -> Type 0 := fun (A : Type 0) => sum (prod (), A)
+
+def none : (0 A : Type 0) -> Option A :=
+  fun (0 A : Type 0) => inj 0 of 2 (tuple ())
+
+def pureOption : (0 A : Type 0) -> A -> Option A :=
+  fun (0 A : Type 0) (a : A) => inj 1 of 2 a
+
+def mapOption : (0 A : Type 0) -> (0 B : Type 0) -> (A -> B) -> Option A -> Option B :=
+  fun (0 A : Type 0) (0 B : Type 0) (f : A -> B) (o : Option A) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) => inj 1 of 2 (f a)
+
+def bindOption : (0 A : Type 0) -> (0 B : Type 0) -> Option A -> (A -> Option B) -> Option B :=
+  fun (0 A : Type 0) (0 B : Type 0) (o : Option A) (f : A -> Option B) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) => f a
+
+def filterOption : (0 A : Type 0) -> (A -> Option (prod ())) -> Option A -> Option A :=
+  fun (0 A : Type 0) (p : A -> Option (prod ())) (o : Option A) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) =>
+      (case p a with
+       | 0 (u : prod ()) => inj 0 of 2 u
+       | 1 (u : prod ()) => inj 1 of 2 a)
+
+def Sum : Type 0 -> Type 0 -> Type 0 := fun (A : Type 0) (B : Type 0) => sum (A, B)
+
+def pureSum : (0 E : Type 0) -> (0 A : Type 0) -> A -> Sum E A :=
+  fun (0 E : Type 0) (0 A : Type 0) (a : A) => inj 1 of 2 a
+
+def mapSum : (0 E : Type 0) -> (0 A : Type 0) -> (0 B : Type 0) -> (A -> B) -> Sum E A -> Sum E B :=
+  fun (0 E : Type 0) (0 A : Type 0) (0 B : Type 0) (f : A -> B) (s : Sum E A) =>
+    case s with
+    | 0 (e : E) => inj 0 of 2 e
+    | 1 (a : A) => inj 1 of 2 (f a)
+
+def bindSum : (0 E : Type 0) -> (0 A : Type 0) -> (0 B : Type 0) -> Sum E A -> (A -> Sum E B) -> Sum E B :=
+  fun (0 E : Type 0) (0 A : Type 0) (0 B : Type 0) (s : Sum E A) (f : A -> Sum E B) =>
+    case s with
+    | 0 (e : E) => inj 0 of 2 e
+    | 1 (a : A) => f a
+
+-- @section 4 Ballots
+-- One list family per element type, so `map` is an endomap and `bind`
+-- stays in the family.  There is no `unfold`: it has no structural
+-- measure (host CAPABILITY.md, Kernel).
+mu Ballots : Type 0 :=
+  | bnil : Ballots
+  | bcons (h : Ballot) (t : Ballots) : Ballots
+
+def rec foldBallots : (0 B : Type 0) -> (Ballot -> B -> B) -> B -> Ballots -> B :=
+  fun (0 B : Type 0) (f : Ballot -> B -> B) (z : B) (xs : Ballots) =>
+    match xs as w in Ballots return B with
+    | bnil => z
+    | bcons h t => f h (foldBallots B f z t)
+
+def appendBallots : Ballots -> Ballots -> Ballots :=
+  fun (xs : Ballots) (ys : Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => bcons h t) ys xs
+
+def pureBallots : Ballot -> Ballots := fun (b : Ballot) => bcons b bnil
+
+def mapBallots : (Ballot -> Ballot) -> Ballots -> Ballots :=
+  fun (f : Ballot -> Ballot) (xs : Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => bcons (f h) t) bnil xs
+
+def bindBallots : Ballots -> (Ballot -> Ballots) -> Ballots :=
+  fun (xs : Ballots) (f : Ballot -> Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => appendBallots (f h) t) bnil xs
+
+def filterBallots : (Ballot -> Option (prod ())) -> Ballots -> Ballots :=
+  fun (p : Ballot -> Option (prod ())) (xs : Ballots) =>
+    foldBallots Ballots
+      (fun (h : Ballot) (t : Ballots) =>
+        case p h with
+        | 0 (u : prod ()) => t
+        | 1 (u : prod ()) => bcons h t)
+      bnil xs
+
+-- @section 5 Tally, Config and orbit
+-- `Config` states `total (tallyOf xs) = members`, so `orbit` reuses that
+-- proof.  Built-in `Nat` has no eliminator and `natAdd` reduces only on
+-- literals, so `total (tallyOf xs) = length xs` has no proof for an open
+-- `xs` (probe-forced).
+def T3 : Type 0 := prod (Nat, prod (Nat, Nat))
+
+def bump : Ballot -> T3 -> T3 := fun (d : Ballot) (t : T3) =>
+  match d as w in Charter return T3 with
+  | open => tuple (natAdd t.0 1, t.1)
+  | restricted => tuple (t.0, tuple (natAdd t.1.0 1, t.1.1))
+  | frozen => tuple (t.0, tuple (t.1.0, natAdd t.1.1 1))
+
+def tallyOf : Ballots -> T3 := foldBallots T3 bump (tuple (0, tuple (0, 0)))
+
+def total : T3 -> Nat := fun (t : T3) => natAdd t.0 (natAdd t.1.0 t.1.1)
+
+-- `Config` and `Tally` are `mu` records, not Sigma types: the kernel does
+-- not identify `s.1` in the type of `s.2` with a written `s.1`, so
+-- `fun (s : S) => (s.1, s.2)` is refused, and there is no Sigma pattern
+-- (host CAPABILITY.md, Kernel).  A `match` on a record binds both fields.
+mu Config : Type 0 :=
+  | mkConfig (xs : Ballots) (e : EqNat (total (tallyOf xs)) members) : Config
+
+mu Tally : Type 0 :=
+  | mkTally (t : T3) (e : EqNat (total t) members) : Tally
+
+def ballots : Config -> Ballots := fun (x : Config) =>
+  match x as w in Config return Ballots with
+  | mkConfig xs e => xs
+
+def counts : Tally -> T3 := fun (t : Tally) =>
+  match t as w in Tally return T3 with
+  | mkTally c e => c
+
+def orbit : Config -> Tally := fun (x : Config) =>
+  match x as w in Config return Tally with
+  | mkConfig xs e => mkTally (tallyOf xs) e
+
+mu EqTally : (0 a : Tally) -> (0 b : Tally) -> Type 0 :=
+  | reflTally : (0 t : Tally) -> EqTally t t
+
+def transportTally : (0 P : Tally -> Type 0) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> P x -> P y :=
+  fun (0 P : Tally -> Type 0) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return P i -> P j with
+    | reflTally 0 z => fun (p : P z) => p
+
+def symmTally : (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqTally y x :=
+  fun (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqTally j i with
+    | reflTally 0 z => reflTally z
+
+def transTally : (0 x : Tally) -> (0 y : Tally) -> (0 z : Tally) -> EqTally x y -> EqTally y z -> EqTally x z :=
+  fun (0 x : Tally) (0 y : Tally) (0 z : Tally) (e1 : EqTally x y) (e2 : EqTally y z) =>
+    transportTally (fun (w : Tally) => EqTally x w) y z e2 e1
+
+def congTally : (f : Tally -> Tally) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqTally (f x) (f y) :=
+  fun (f : Tally -> Tally) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqTally (f i) (f j) with
+    | reflTally 0 z => reflTally (f z)
+
+def congTD : (f : Tally -> Charter) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqDec (f x) (f y) :=
+  fun (f : Tally -> Charter) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqDec (f i) (f j) with
+    | reflTally 0 z => reflDec (f z)
+
+-- @section 6 Constitution, aggregation and amendment
+-- At a discrete decision space an aggregation of `F` is an orbit rule and a
+-- proof that `F` factors through it (host README, The domain).  It is a record
+-- indexed by `F` (fixed index type `ChoiceRule`), for the reason of
+-- section 5, so `rule` and `cast` read it by `match`.
+def ChoiceRule : Type 0 := Config -> Charter
+
+mu Aggregation : (0 F : ChoiceRule) -> Type 0 :=
+  | mkAgg : (0 F : ChoiceRule) -> (L : Tally -> Charter) -> ((x : Config) -> EqDec (F x) (L (orbit x))) -> Aggregation F
+
+def rule : (0 F : ChoiceRule) -> Aggregation F -> Tally -> Charter :=
+  fun (0 F : ChoiceRule) (L : Aggregation F) =>
+    match L as q in Aggregation G return Tally -> Charter with
+    | mkAgg 0 G l p => l
+
+def gov : (F : ChoiceRule) -> Aggregation F -> ChoiceRule :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) => rule F L (orbit x)
+
+def cast : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> EqDec (F x) (gov F L x) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) =>
+    match L as q in Aggregation G return EqDec (G x) (gov G q x) with
+    | mkAgg 0 G l p => p x
+
+def IsSelfConstituting : ChoiceRule -> Type 0 := fun (F : ChoiceRule) =>
+  (L : Aggregation F) * ((x : Config) -> EqDec (gov F L x) (F x))
+
+def selfConstitutes : (F : ChoiceRule) -> (L : Aggregation F) -> IsSelfConstituting F :=
+  fun (F : ChoiceRule) (L : Aggregation F) =>
+    (L, fun (x : Config) => symmDec (F x) (gov F L x) (cast F L x))
+
+def AmendmentRule : Type 0 := (Tally -> Charter) -> ChoiceRule
+
+def canonical : AmendmentRule :=
+  fun (H : Tally -> Charter) (x : Config) => H (orbit x)
+
+def amend : AmendmentRule -> (F : ChoiceRule) -> Aggregation F -> ChoiceRule :=
+  fun (Phi : AmendmentRule) (F : ChoiceRule) (L : Aggregation F) => Phi (rule F L)
+
+def homAmend : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> EqDec (amend canonical F L x) (gov F L x) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) => reflDec (gov F L x)
+
+def reconstitute : (F : ChoiceRule) -> (L : Aggregation F) -> Aggregation (gov F L) :=
+  fun (F : ChoiceRule) (L : Aggregation F) =>
+    mkAgg (gov F L) (rule F L) (fun (x : Config) => reflDec (rule F L (orbit x)))
+
+-- @section 7 Identity and registry
+-- SPEC section 4, rows `Identity` to `Profile` (`setWallet` and `setProfile`
+-- are the writes of `attest`).  An identity is not an address: the registry maps each
+-- wallet to at most one identity, and many wallets to one identity.
+def Identity : Type 0 := Nat
+
+def Wallet : Type 0 := Nat
+
+mu Juris : Type 0 :=
+  | domestic : Juris
+  | foreign : Juris
+
+mu Status : Type 0 :=
+  | retail : Status
+  | accredited : Status
+
+def Profile : Type 0 := prod (Juris, Status)
+
+def Registry : Type 0 := Wallet -> Option Identity
+
+def Profiles : Type 0 := Identity -> Profile
+
+def setWallet : Registry -> Wallet -> Identity -> Registry :=
+  fun (G : Registry) (w : Wallet) (h : Identity) (v : Wallet) =>
+    case natEq v w with
+    | 0 (u : prod ()) => G v
+    | 1 (u : prod ()) => pureOption Identity h
+
+def setProfile : Profiles -> Identity -> Profile -> Profiles :=
+  fun (P : Profiles) (h : Identity) (p : Profile) (k : Identity) =>
+    case natEq k h with
+    | 0 (u : prod ()) => P k
+    | 1 (u : prod ()) => p
+
+-- @section 8 Measure
+-- SPEC section 4, row `Measure`: `mass m h` is the count of units of `1/S`
+-- of the interest that identity `h` holds (R2).  `credit` and `debit`
+-- compare identities with `natEq`.  `debit` takes an erased proof that `n`
+-- is below the mass: subtraction in a cancellative monoid.
+def Measure : Type 0 := Identity -> Nat
+
+def empty : Measure := fun (h : Identity) => 0
+
+def mass : Measure -> Identity -> Nat := fun (m : Measure) (h : Identity) => m h
+
+def credit : Measure -> Identity -> Nat -> Measure :=
+  fun (m : Measure) (p : Identity) (n : Nat) (h : Identity) =>
+    case natEq h p with
+    | 0 (u : prod ()) => m h
+    | 1 (u : prod ()) => natAdd (m h) n
+
+def Le : Nat -> Nat -> Type 0 := fun (n : Nat) (j : Nat) =>
+  (k : Nat) * EqNat (natAdd n k) j
+
+def debit : (m : Measure) -> (p : Identity) -> (n : Nat) -> (0 e : Le n (mass m p)) -> Measure :=
+  fun (m : Measure) (p : Identity) (n : Nat) (0 e : Le n (mass m p)) (h : Identity) =>
+    case natEq h p with
+    | 0 (u : prod ()) => m h
+    | 1 (u : prod ()) => natSub (m h) n
+
+-- @section 9 Restriction and waterfall
+-- SPEC section 4, rows `Kind` to `Restriction`.  The meaning of `pass` is
+-- the identity on the asset and the meaning of `retain` is 0, so W stays a
+-- homomorphism.
+mu Kind : Type 0 :=
+  | rent : Kind
+  | sale : Kind
+
+mu Gate : Type 0 :=
+  | pass : Gate
+  | retain : Gate
+
+def Waterfall : Type 0 := Kind -> Gate
+
+mu Cap : Type 0 :=
+  | deny : Cap
+  | upTo (n : Nat) : Cap
+  | any : Cap
+
+def Restriction : Type 0 := Profile -> Profile -> Cap
+
+-- `admits c q` is the test "the cap `c` admits `q` units": leg 1 admits.
+-- `upTo n` admits `q <= n`.  `R(h, k, q) := admits (rule (prof h) (prof k)) q`.
+def admits : Cap -> Nat -> Option (prod ()) := fun (c : Cap) (q : Nat) =>
+  match c as w in Cap return Option (prod ()) with
+  | deny => none (prod ())
+  | upTo n =>
+    (case natLt n q with
+     | 0 (u : prod ()) => pureOption (prod ()) (tuple ())
+     | 1 (u : prod ()) => none (prod ()))
+  | any => pureOption (prod ()) (tuple ())
+
+-- `release g a` is the amount that the gate `g` releases from a reserve
+-- `a`: all of it at `pass`, 0 at `retain`.
+def release : Gate -> Nat -> Nat := fun (g : Gate) (a : Nat) =>
+  match g as w in Gate return Nat with
+  | pass => a
+  | retain => 0
+
+-- @section 10 Treasury and state
+-- SPEC section 4, rows `Treasury`, `InterestState` and `OwnershipDAO`: a
+-- reserve for each kind (wei), the accrual index, and a claim numerator for
+-- each identity (units of `1/S` wei).  The state holds the measure, the
+-- active charter and the treasury; W and R come from the active charter.
+def Treasury : Type 0 := prod (Kind -> Nat, prod (Nat, Identity -> Nat))
+
+def InterestState : Type 0 := prod (Measure, prod (Charter, Treasury))
+
+def OwnershipDAO : ChoiceRule -> Type 0 := fun (F : ChoiceRule) =>
+  (L : Aggregation F) * InterestState
+
+def kindCode : Kind -> Nat := fun (j : Kind) =>
+  match j as w in Kind return Nat with
+  | rent => 0
+  | sale => 1
+
+def addReserve : (Kind -> Nat) -> Kind -> Nat -> Kind -> Nat :=
+  fun (r : Kind -> Nat) (i : Kind) (a : Nat) (j : Kind) =>
+    case natEq (kindCode j) (kindCode i) with
+    | 0 (u : prod ()) => r j
+    | 1 (u : prod ()) => natAdd (r j) a
+
+-- `subReserve r i a`: the reserve of kind `i` drops by `a` (`natSub`).
+def subReserve : (Kind -> Nat) -> Kind -> Nat -> Kind -> Nat :=
+  fun (r : Kind -> Nat) (i : Kind) (a : Nat) (j : Kind) =>
+    case natEq (kindCode j) (kindCode i) with
+    | 0 (u : prod ()) => r j
+    | 1 (u : prod ()) => natSub (r j) a
+
+-- `num s h` is the claim numerator of `h` in `s`; `setNum n h v` is `n`
+-- with the numerator of `h` set to `v`.
+def num : InterestState -> Identity -> Nat := fun (s : InterestState) (h : Identity) =>
+  s.1.1.1.1 h
+
+def setNum : (Identity -> Nat) -> Identity -> Nat -> Identity -> Nat :=
+  fun (n : Identity -> Nat) (h : Identity) (v : Nat) (k : Identity) =>
+    case natEq k h with
+    | 0 (u : prod ()) => n k
+    | 1 (u : prod ()) => v
+
+-- `Holders` is the genesis table of a program (SPEC section 7): one row per
+-- wallet, with its identity, its profile and its units.  The compiler reads
+-- the optional program defs `start : Charter`, `genesis : Holders`,
+-- `restrict : Charter -> Restriction`, `waterfall : Charter -> Waterfall` and
+-- `issuers : Charter -> Identity -> Option (prod ())` into the contract.
+mu Holders : Type 0 :=
+  | hnil : Holders
+  | hrow (w : Wallet) (h : Identity) (p : Profile) (u : Nat) (rest : Holders) : Holders
+
+-- @section 11 Operations
+-- SPEC section 5.  The tables of each charter are arguments, not program
+-- names (O9): `R` gives the restriction of a charter and `P` the profile of
+-- an identity.  `castOrbit`: two configurations in one orbit give one
+-- verdict.
+def castOrbit : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> (y : Config) -> EqTally (orbit x) (orbit y) -> EqDec (gov F L x) (gov F L y) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (y : Config) (e : EqTally (orbit x) (orbit y)) =>
+    congTD (rule F L) (orbit x) (orbit y) e
+
+-- `transfer R P h k q s e`: q units move from h to k when the restriction
+-- of the active charter admits q from the profile of h to the profile of
+-- k, else none.  `e` is the erased proof `q <= mass h`.
+def transfer : (R : Charter -> Restriction) -> (P : Profiles) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass s.0 h)) -> Option InterestState :=
+  fun (R : Charter -> Restriction) (P : Profiles) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass s.0 h)) =>
+    case admits (R s.1.0 (P h) (P k)) q with
+    | 0 (u : prod ()) => none InterestState
+    | 1 (u : prod ()) => pureOption InterestState (tuple (credit (debit s.0 h q e) k q, s.1))
+
+-- `deposit i a s`: the reserve of kind `i` grows by `a`.  The measure and
+-- the charter do not change.
+def deposit : Kind -> Nat -> InterestState -> InterestState :=
+  fun (i : Kind) (a : Nat) (s : InterestState) =>
+    tuple (s.0, tuple (s.1.0, tuple (addReserve s.1.1.0 i a, s.1.1.1)))
+
+-- `amendState F L x s` is `amend` of SPEC section 5 (section 6 owns the
+-- name `amend`): the active charter becomes `gov F L x`.  The measure and
+-- the treasury do not change.
+def amendState : (F : ChoiceRule) -> Aggregation F -> Config -> InterestState -> InterestState :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (s : InterestState) =>
+    tuple (s.0, tuple (gov F L x, s.1.1))
+
+-- `withdraw h S s` pays `natDiv (num s h) S` wei to `h` and keeps
+-- `natMod (num s h) S` as the claim of `h` (R2), so paid * S + kept = num
+-- when S > 0.  At S = 0 the kernel gives `natDiv n 0 = natMod n 0 = 0` (as
+-- the EVM DIV and MOD): it pays 0 and the claim becomes 0.
+def withdraw : Identity -> Nat -> InterestState -> prod (Nat, InterestState) :=
+  fun (h : Identity) (S : Nat) (s : InterestState) =>
+    tuple (natDiv (num s h) S, tuple (s.0, tuple (s.1.0, tuple (s.1.1.0, tuple (s.1.1.1.0, setNum s.1.1.1.1 h (natMod (num s h) S))))))
+
+-- `accrue i d s`: the reserve of kind `i` drops by `d` and the claim
+-- numerator of each identity `k` grows by `natMul (mass k) d`.
+def accrue : Kind -> Nat -> InterestState -> InterestState :=
+  fun (i : Kind) (d : Nat) (s : InterestState) =>
+    tuple (s.0, tuple (s.1.0, tuple (subReserve s.1.1.0 i d, tuple (s.1.1.1.0, fun (k : Identity) => natAdd (s.1.1.1.1 k) (natMul (mass s.0 k) d)))))
+
+-- `distribute F oL W S i s` (SPEC section 5) is none at impossibility (the
+-- aggregation `oL` is none) and none at S = 0.  Else it releases
+-- d = W(i)(reserve[i]) by `accrue`.  Sum law: when the masses sum to S, the
+-- numerators grow by S * d in total.  The accrual index does not change.
+def distribute : (F : ChoiceRule) -> Option (Aggregation F) -> (Charter -> Waterfall) -> Nat -> Kind -> InterestState -> Option InterestState :=
+  fun (F : ChoiceRule) (oL : Option (Aggregation F)) (W : Charter -> Waterfall) (S : Nat) (i : Kind) (s : InterestState) =>
+    case oL with
+    | 0 (u : prod ()) => none InterestState
+    | 1 (L : Aggregation F) =>
+      case natEq S 0 with
+      | 0 (v : prod ()) => pureOption InterestState (accrue i (release (W s.1.0 i) (s.1.1.0 i)) s)
+      | 1 (v : prod ()) => none InterestState
+
+-- `attest I G P c w h p s` (SPEC section 5, USER ruling 2026-10-08): when
+-- the caller `c` is a trusted issuer of the active charter (`I`), the
+-- registry maps the wallet `w` to `h` and the profile of `h` becomes `p`;
+-- else none.  The state does not change, so it is not in the result.
+def attest : (Charter -> Identity -> Option (prod ())) -> Registry -> Profiles -> Identity -> Wallet -> Identity -> Profile -> InterestState -> Option (prod (Registry, Profiles)) :=
+  fun (I : Charter -> Identity -> Option (prod ())) (G : Registry) (P : Profiles) (c : Identity) (w : Wallet) (h : Identity) (p : Profile) (s : InterestState) =>
+    case I s.1.0 c with
+    | 0 (u : prod ()) => none (prod (Registry, Profiles))
+    | 1 (u : prod ()) => pureOption (prod (Registry, Profiles)) (tuple (setWallet G w h, setProfile P h p))

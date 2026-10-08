@@ -1,0 +1,7 @@
+build/
+scratch/
+*.tmp
+__pycache__/
+build/
+.gatework/
+__pycache__/

@@ -1,0 +1,5 @@
+-- A match must leave the following numeric arm for the enclosing case.
+def nested : Nat :=
+  case s with
+  | 0 (a : Nat) => match a as z in F return Nat with | C => a
+  | 1 (b : Nat) => match b as z in F return Nat with | D => b

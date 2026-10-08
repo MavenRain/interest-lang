@@ -1,0 +1,119 @@
+def members : Nat := 3
+-- Arrow-Debreu regime (host README, The domain).  The constitution factors through
+-- `orbit`, so the program writes its aggregation and uses cast and amend.
+-- `H` is plurality by `natLt`: a strict maximum wins, and a tie gives
+-- `frozen`.  `c` is the count triple (open, restricted, frozen).
+def plural : T3 -> Charter := fun (c : T3) =>
+  case natLt c.1.0 c.0 with
+  | 0 (u : prod ()) =>
+    (case natLt c.0 c.1.0 with
+     | 0 (v : prod ()) => frozen
+     | 1 (v : prod ()) =>
+       (case natLt c.1.1 c.1.0 with
+        | 0 (w : prod ()) => frozen
+        | 1 (w : prod ()) => restricted))
+  | 1 (u : prod ()) =>
+    (case natLt c.1.1 c.0 with
+     | 0 (v : prod ()) => frozen
+     | 1 (v : prod ()) => open)
+def H : Tally -> Charter := fun (t : Tally) => plural (counts t)
+
+def F : ChoiceRule := fun (x : Config) => H (orbit x)
+def agg : Aggregation F := mkAgg F H (fun (x : Config) => reflDec (H (orbit x)))
+
+-- cast: two configurations in one orbit give one verdict.
+def xs : Ballots := bcons open (bcons restricted (bcons open bnil))
+def x : Config := mkConfig xs (reflNat 3)
+def ys : Ballots := bcons restricted (bcons open (bcons open bnil))
+def y : Config := mkConfig ys (reflNat 3)
+def castX : EqDec (F x) (gov F agg x) := cast F agg x
+def verdictX : EqDec (gov F agg x) open := reflDec open
+def sameOrbit : EqTally (orbit x) (orbit y) := reflTally (orbit x)
+def castXY : EqDec (gov F agg x) (gov F agg y) := castOrbit F agg x y sameOrbit
+
+-- amend at the canonical amendment rule.
+def G : ChoiceRule := amend canonical F agg
+def homX : EqDec (G x) (gov F agg x) := homAmend F agg x
+def aggGov : Aggregation (gov F agg) := reconstitute F agg
+def selfF : IsSelfConstituting F := selfConstitutes F agg
+
+-- Scenario (refl candidates): 5 units go to identity 1, then 2 of them move
+-- from identity 1 to identity 2.  The sum of the two masses stays 5.
+def m1 : Measure := credit empty 1 5
+def e1 : Le 2 (mass m1 1) := (3, reflNat 5)
+def m2 : Measure := credit (debit m1 1 2 e1) 2 2
+def massOne : EqNat (mass m2 1) 3 := reflNat 3
+def massTwo : EqNat (mass m2 2) 2 := reflNat 2
+def conserved : EqNat (natAdd (mass m2 1) (mass m2 2)) 5 := reflNat 5
+
+-- Interest state (refl candidates, SPEC section 5 laws).  `restrict` gives
+-- the restriction of each charter: `open` admits any amount, `restricted`
+-- admits up to 4 units, `frozen` admits nothing.  Each identity is
+-- domestic and retail.
+def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
+  match c as w in Charter return Cap with
+  | open => any
+  | restricted => upTo 4
+  | frozen => deny
+def prof : Profiles := fun (h : Identity) => tuple (domestic, retail)
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 0))
+def s0 : InterestState := tuple (m1, tuple (restricted, t0))
+def stateOr : InterestState -> Option InterestState -> InterestState :=
+  fun (d : InterestState) (o : Option InterestState) =>
+    case o with
+    | 0 (u : prod ()) => d
+    | 1 (t : InterestState) => t
+
+-- transfer conserves the sum of the masses, and it moves 2 units.
+def e2 : Le 2 (mass s0.0 1) := (3, reflNat 5)
+def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 2 s0 e2)
+def transferConserves : EqNat (natAdd (mass s1.0 1) (mass s1.0 2)) (natAdd (mass s0.0 1) (mass s0.0 2)) := reflNat 5
+def transferMoves : EqNat (mass s1.0 2) 2 := reflNat 2
+
+-- transfer at q = 0 is the identity (the fallback s1 would give 3).
+def e0 : Le 0 (mass s0.0 1) := (5, reflNat 5)
+def z : InterestState := stateOr s1 (transfer restrict prof 1 2 0 s0 e0)
+def transferZero : EqNat (mass z.0 1) (mass s0.0 1) := reflNat 5
+
+-- the frozen charter admits no transfer.
+def sFrozen : InterestState := tuple (m1, tuple (frozen, t0))
+def transferFrozen : EqNat (mass (stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 1) 3 := reflNat 3
+
+-- deposit, then amend: the charter becomes `gov F agg y` = open; the mass
+-- and the treasury do not change.
+def s2 : InterestState := deposit rent 7 s1
+def s3 : InterestState := amendState F agg y s2
+def depositRent : EqNat (s2.1.1.0 rent) 7 := reflNat 7
+def depositSale : EqNat (s2.1.1.0 sale) 0 := reflNat 0
+def amendCharter : EqDec s3.1.0 open := reflDec open
+def amendMass : EqNat (natAdd (mass s3.0 1) (mass s3.0 2)) (natAdd (mass s2.0 1) (mass s2.0 2)) := reflNat 5
+def amendReserve : EqNat (s3.1.1.0 rent) (s2.1.1.0 rent) := reflNat 7
+def dao : OwnershipDAO F := (agg, s3)
+
+-- withdraw (SPEC section 5, R2): 17 units of claim at supply S = 5 pay 3
+-- wei and keep 2, so paid * S + kept = num.  At S = 0 it pays 0 and the
+-- claim becomes 0 (natMod 17 0 = 0).
+def tW : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 17))
+def sW : InterestState := tuple (m1, tuple (restricted, tW))
+def w5 : prod (Nat, InterestState) := withdraw 1 5 sW
+def withdrawLaw : EqNat (natAdd (natMul w5.0 5) (num w5.1 1)) (num sW 1) := reflNat 17
+def withdrawPays : EqNat w5.0 3 := reflNat 3
+def withdrawOther : EqNat (num w5.1 2) 17 := reflNat 17
+def w0 : prod (Nat, InterestState) := withdraw 1 0 sW
+def withdrawZero : EqNat (num w0.1 1) 0 := reflNat 0
+def withdrawZeroPays : EqNat w0.0 0 := reflNat 0
+
+-- distribute (SPEC section 5): `wf` passes rent and retains sale.  The
+-- masses 3 + 2 of `s1` sum to S = 5, the reserve holds rent 10 and sale 4,
+-- and each numerator starts at 1.  The fallback `sW` (numerators 17) shows
+-- a none.
+def wf : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
+  match j as w in Kind return Gate with
+  | rent => pass
+  | sale => retain
+def tD : Treasury := tuple (addReserve (fun (j : Kind) => 4) rent 6, tuple (0, fun (h : Identity) => 1))
+def sD : InterestState := tuple (s1.0, tuple (restricted, tD))
+def oA : Option (Aggregation F) := pureOption (Aggregation F) agg
+def d1 : InterestState := stateOr sW (distribute F oA wf 5 rent sD)
+def distributeSum : EqNat (natAdd (num d1 1) (num d1 2)) (natAdd (natAdd (num sD 1) (num sD 2)) (natMul 5 (sD.1.1.0 rent))) := reflNat 52
+def distributeShare : EqNat (num d1 1) 31 := reflNat 30

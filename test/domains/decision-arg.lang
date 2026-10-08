@@ -1,0 +1,362 @@
+-- Test domain decision-arg (test/domains.sh): the k4 domain with a
+-- `defer` that takes a Nat, so D is not a mu of nullary constructors
+-- and `interestc table` refuses with TABLE_DECISION.
+-- The sample domain of the tcc-evm-dao kit (host README, The domain).
+-- The target file holds `def members : Nat := N`, this prelude, the program
+-- and the contract, in that order (host README, The domain).  Each `-- @section`
+-- line starts one section, so a check of each prefix finds the first bad
+-- section.  Equality is one `mu` family per index type and each list is one
+-- `mu` family per element type: a constructor of a family with a parameter
+-- cannot appear in a term (host CAPABILITY.md, Kernel).  Each constructor
+-- takes its index explicitly (`reflNat 2`).
+
+-- @section 1 Decision
+mu Decision : Type 0 :=
+  | release : Decision
+  | refund : Decision
+  | hold : Decision
+  | defer (n : Nat) : Decision
+
+def decide : (0 B : Type 0) -> B -> B -> B -> B -> Decision -> B :=
+  fun (0 B : Type 0) (r : B) (f : B) (h : B) (e : B) (d : Decision) =>
+    match d as w in Decision return B with
+    | release => r
+    | refund => f
+    | hold => h
+    | defer n => e
+
+def Ballot : Type 0 := Decision
+
+-- @section 2 Equality on Nat and on Decision
+mu EqNat : (0 a : Nat) -> (0 b : Nat) -> Type 0 :=
+  | reflNat : (0 x : Nat) -> EqNat x x
+
+def transportNat : (0 P : Nat -> Type 0) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> P x -> P y :=
+  fun (0 P : Nat -> Type 0) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return P i -> P j with
+    | reflNat 0 z => fun (p : P z) => p
+
+def symmNat : (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqNat y x :=
+  fun (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqNat j i with
+    | reflNat 0 z => reflNat z
+
+def transNat : (0 x : Nat) -> (0 y : Nat) -> (0 z : Nat) -> EqNat x y -> EqNat y z -> EqNat x z :=
+  fun (0 x : Nat) (0 y : Nat) (0 z : Nat) (e1 : EqNat x y) (e2 : EqNat y z) =>
+    transportNat (fun (w : Nat) => EqNat x w) y z e2 e1
+
+def congNat : (f : Nat -> Nat) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqNat (f x) (f y) :=
+  fun (f : Nat -> Nat) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqNat (f i) (f j) with
+    | reflNat 0 z => reflNat (f z)
+
+mu EqDec : (0 a : Decision) -> (0 b : Decision) -> Type 0 :=
+  | reflDec : (0 d : Decision) -> EqDec d d
+
+def transportDec : (0 P : Decision -> Type 0) -> (0 x : Decision) -> (0 y : Decision) -> EqDec x y -> P x -> P y :=
+  fun (0 P : Decision -> Type 0) (0 x : Decision) (0 y : Decision) (e : EqDec x y) =>
+    match e as q in EqDec i j return P i -> P j with
+    | reflDec 0 z => fun (p : P z) => p
+
+def symmDec : (0 x : Decision) -> (0 y : Decision) -> EqDec x y -> EqDec y x :=
+  fun (0 x : Decision) (0 y : Decision) (e : EqDec x y) =>
+    match e as q in EqDec i j return EqDec j i with
+    | reflDec 0 z => reflDec z
+
+def transDec : (0 x : Decision) -> (0 y : Decision) -> (0 z : Decision) -> EqDec x y -> EqDec y z -> EqDec x z :=
+  fun (0 x : Decision) (0 y : Decision) (0 z : Decision) (e1 : EqDec x y) (e2 : EqDec y z) =>
+    transportDec (fun (w : Decision) => EqDec x w) y z e2 e1
+
+def congDec : (f : Decision -> Decision) -> (0 x : Decision) -> (0 y : Decision) -> EqDec x y -> EqDec (f x) (f y) :=
+  fun (f : Decision -> Decision) (0 x : Decision) (0 y : Decision) (e : EqDec x y) =>
+    match e as q in EqDec i j return EqDec (f i) (f j) with
+    | reflDec 0 z => reflDec (f z)
+
+def congND : (f : Nat -> Decision) -> (0 x : Nat) -> (0 y : Nat) -> EqNat x y -> EqDec (f x) (f y) :=
+  fun (f : Nat -> Decision) (0 x : Nat) (0 y : Nat) (e : EqNat x y) =>
+    match e as q in EqNat i j return EqDec (f i) (f j) with
+    | reflNat 0 z => reflDec (f z)
+
+-- @section 3 Option and Sum
+-- Generic type functions over the built-in `sum`.  Leg 0 of `Option A` is
+-- none and leg 1 is some.  A test is `A -> Option (prod ())`: leg 1 keeps,
+-- as leg 1 of `natEq` and `natLt` is true.
+def Option : Type 0 -> Type 0 := fun (A : Type 0) => sum (prod (), A)
+
+def none : (0 A : Type 0) -> Option A :=
+  fun (0 A : Type 0) => inj 0 of 2 (tuple ())
+
+def pureOption : (0 A : Type 0) -> A -> Option A :=
+  fun (0 A : Type 0) (a : A) => inj 1 of 2 a
+
+def mapOption : (0 A : Type 0) -> (0 B : Type 0) -> (A -> B) -> Option A -> Option B :=
+  fun (0 A : Type 0) (0 B : Type 0) (f : A -> B) (o : Option A) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) => inj 1 of 2 (f a)
+
+def bindOption : (0 A : Type 0) -> (0 B : Type 0) -> Option A -> (A -> Option B) -> Option B :=
+  fun (0 A : Type 0) (0 B : Type 0) (o : Option A) (f : A -> Option B) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) => f a
+
+def filterOption : (0 A : Type 0) -> (A -> Option (prod ())) -> Option A -> Option A :=
+  fun (0 A : Type 0) (p : A -> Option (prod ())) (o : Option A) =>
+    case o with
+    | 0 (u : prod ()) => inj 0 of 2 u
+    | 1 (a : A) =>
+      (case p a with
+       | 0 (u : prod ()) => inj 0 of 2 u
+       | 1 (u : prod ()) => inj 1 of 2 a)
+
+def Sum : Type 0 -> Type 0 -> Type 0 := fun (A : Type 0) (B : Type 0) => sum (A, B)
+
+def pureSum : (0 E : Type 0) -> (0 A : Type 0) -> A -> Sum E A :=
+  fun (0 E : Type 0) (0 A : Type 0) (a : A) => inj 1 of 2 a
+
+def mapSum : (0 E : Type 0) -> (0 A : Type 0) -> (0 B : Type 0) -> (A -> B) -> Sum E A -> Sum E B :=
+  fun (0 E : Type 0) (0 A : Type 0) (0 B : Type 0) (f : A -> B) (s : Sum E A) =>
+    case s with
+    | 0 (e : E) => inj 0 of 2 e
+    | 1 (a : A) => inj 1 of 2 (f a)
+
+def bindSum : (0 E : Type 0) -> (0 A : Type 0) -> (0 B : Type 0) -> Sum E A -> (A -> Sum E B) -> Sum E B :=
+  fun (0 E : Type 0) (0 A : Type 0) (0 B : Type 0) (s : Sum E A) (f : A -> Sum E B) =>
+    case s with
+    | 0 (e : E) => inj 0 of 2 e
+    | 1 (a : A) => f a
+
+-- @section 4 Ballots
+-- One list family per element type, so `map` is an endomap and `bind`
+-- stays in the family.  There is no `unfold`: it has no structural
+-- measure (host CAPABILITY.md, Kernel).
+mu Ballots : Type 0 :=
+  | bnil : Ballots
+  | bcons (h : Ballot) (t : Ballots) : Ballots
+
+def rec foldBallots : (0 B : Type 0) -> (Ballot -> B -> B) -> B -> Ballots -> B :=
+  fun (0 B : Type 0) (f : Ballot -> B -> B) (z : B) (xs : Ballots) =>
+    match xs as w in Ballots return B with
+    | bnil => z
+    | bcons h t => f h (foldBallots B f z t)
+
+def appendBallots : Ballots -> Ballots -> Ballots :=
+  fun (xs : Ballots) (ys : Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => bcons h t) ys xs
+
+def pureBallots : Ballot -> Ballots := fun (b : Ballot) => bcons b bnil
+
+def mapBallots : (Ballot -> Ballot) -> Ballots -> Ballots :=
+  fun (f : Ballot -> Ballot) (xs : Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => bcons (f h) t) bnil xs
+
+def bindBallots : Ballots -> (Ballot -> Ballots) -> Ballots :=
+  fun (xs : Ballots) (f : Ballot -> Ballots) =>
+    foldBallots Ballots (fun (h : Ballot) (t : Ballots) => appendBallots (f h) t) bnil xs
+
+def filterBallots : (Ballot -> Option (prod ())) -> Ballots -> Ballots :=
+  fun (p : Ballot -> Option (prod ())) (xs : Ballots) =>
+    foldBallots Ballots
+      (fun (h : Ballot) (t : Ballots) =>
+        case p h with
+        | 0 (u : prod ()) => t
+        | 1 (u : prod ()) => bcons h t)
+      bnil xs
+
+-- @section 5 Tally, Config and orbit
+-- `Config` states `total (tallyOf xs) = members`, so `orbit` reuses that
+-- proof.  Built-in `Nat` has no eliminator and `natAdd` reduces only on
+-- literals, so `total (tallyOf xs) = length xs` has no proof for an open
+-- `xs` (probe-forced).
+def T4 : Type 0 := prod (Nat, prod (Nat, prod (Nat, Nat)))
+
+def bump : Ballot -> T4 -> T4 := fun (d : Ballot) (t : T4) =>
+  match d as w in Decision return T4 with
+  | release => tuple (natAdd t.0 1, t.1)
+  | refund => tuple (t.0, tuple (natAdd t.1.0 1, t.1.1))
+  | hold => tuple (t.0, tuple (t.1.0, tuple (natAdd t.1.1.0 1, t.1.1.1)))
+  | defer n => tuple (t.0, tuple (t.1.0, tuple (t.1.1.0, natAdd t.1.1.1 1)))
+
+def tallyOf : Ballots -> T4 := foldBallots T4 bump (tuple (0, tuple (0, tuple (0, 0))))
+
+def total : T4 -> Nat := fun (t : T4) => natAdd t.0 (natAdd t.1.0 (natAdd t.1.1.0 t.1.1.1))
+
+-- `Config` and `Tally` are `mu` records, not Sigma types: the kernel does
+-- not identify `s.1` in the type of `s.2` with a written `s.1`, so
+-- `fun (s : S) => (s.1, s.2)` is refused, and there is no Sigma pattern
+-- (host CAPABILITY.md, Kernel).  A `match` on a record binds both fields.
+mu Config : Type 0 :=
+  | mkConfig (xs : Ballots) (e : EqNat (total (tallyOf xs)) members) : Config
+
+mu Tally : Type 0 :=
+  | mkTally (t : T4) (e : EqNat (total t) members) : Tally
+
+def ballots : Config -> Ballots := fun (x : Config) =>
+  match x as w in Config return Ballots with
+  | mkConfig xs e => xs
+
+def counts : Tally -> T4 := fun (t : Tally) =>
+  match t as w in Tally return T4 with
+  | mkTally c e => c
+
+def orbit : Config -> Tally := fun (x : Config) =>
+  match x as w in Config return Tally with
+  | mkConfig xs e => mkTally (tallyOf xs) e
+
+mu EqTally : (0 a : Tally) -> (0 b : Tally) -> Type 0 :=
+  | reflTally : (0 t : Tally) -> EqTally t t
+
+def transportTally : (0 P : Tally -> Type 0) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> P x -> P y :=
+  fun (0 P : Tally -> Type 0) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return P i -> P j with
+    | reflTally 0 z => fun (p : P z) => p
+
+def symmTally : (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqTally y x :=
+  fun (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqTally j i with
+    | reflTally 0 z => reflTally z
+
+def transTally : (0 x : Tally) -> (0 y : Tally) -> (0 z : Tally) -> EqTally x y -> EqTally y z -> EqTally x z :=
+  fun (0 x : Tally) (0 y : Tally) (0 z : Tally) (e1 : EqTally x y) (e2 : EqTally y z) =>
+    transportTally (fun (w : Tally) => EqTally x w) y z e2 e1
+
+def congTally : (f : Tally -> Tally) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqTally (f x) (f y) :=
+  fun (f : Tally -> Tally) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqTally (f i) (f j) with
+    | reflTally 0 z => reflTally (f z)
+
+def congTD : (f : Tally -> Decision) -> (0 x : Tally) -> (0 y : Tally) -> EqTally x y -> EqDec (f x) (f y) :=
+  fun (f : Tally -> Decision) (0 x : Tally) (0 y : Tally) (e : EqTally x y) =>
+    match e as q in EqTally i j return EqDec (f i) (f j) with
+    | reflTally 0 z => reflDec (f z)
+
+-- @section 6 Constitution, aggregation and amendment
+-- At a discrete decision space an aggregation of `F` is an orbit rule and a
+-- proof that `F` factors through it (host README, The domain).  It is a record
+-- indexed by `F` (fixed index type `ChoiceRule`), for the reason of
+-- section 5, so `rule` and `cast` read it by `match`.
+def ChoiceRule : Type 0 := Config -> Decision
+
+mu Aggregation : (0 F : ChoiceRule) -> Type 0 :=
+  | mkAgg : (0 F : ChoiceRule) -> (L : Tally -> Decision) -> ((x : Config) -> EqDec (F x) (L (orbit x))) -> Aggregation F
+
+def rule : (0 F : ChoiceRule) -> Aggregation F -> Tally -> Decision :=
+  fun (0 F : ChoiceRule) (L : Aggregation F) =>
+    match L as q in Aggregation G return Tally -> Decision with
+    | mkAgg 0 G l p => l
+
+def gov : (F : ChoiceRule) -> Aggregation F -> ChoiceRule :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) => rule F L (orbit x)
+
+def cast : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> EqDec (F x) (gov F L x) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) =>
+    match L as q in Aggregation G return EqDec (G x) (gov G q x) with
+    | mkAgg 0 G l p => p x
+
+def IsSelfConstituting : ChoiceRule -> Type 0 := fun (F : ChoiceRule) =>
+  (L : Aggregation F) * ((x : Config) -> EqDec (gov F L x) (F x))
+
+def selfConstitutes : (F : ChoiceRule) -> (L : Aggregation F) -> IsSelfConstituting F :=
+  fun (F : ChoiceRule) (L : Aggregation F) =>
+    (L, fun (x : Config) => symmDec (F x) (gov F L x) (cast F L x))
+
+def AmendmentRule : Type 0 := (Tally -> Decision) -> ChoiceRule
+
+def canonical : AmendmentRule :=
+  fun (H : Tally -> Decision) (x : Config) => H (orbit x)
+
+def amend : AmendmentRule -> (F : ChoiceRule) -> Aggregation F -> ChoiceRule :=
+  fun (Phi : AmendmentRule) (F : ChoiceRule) (L : Aggregation F) => Phi (rule F L)
+
+def homAmend : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> EqDec (amend canonical F L x) (gov F L x) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) => reflDec (gov F L x)
+
+def reconstitute : (F : ChoiceRule) -> (L : Aggregation F) -> Aggregation (gov F L) :=
+  fun (F : ChoiceRule) (L : Aggregation F) =>
+    mkAgg (gov F L) (rule F L) (fun (x : Config) => reflDec (rule F L (orbit x)))
+
+-- @section 7 Ledger
+-- `Address := Nat`, so `credit` and `debit` compare addresses with `natEq`
+-- (probe-forced).  `debit` takes an erased proof that `n` is below the
+-- balance: subtraction in a cancellative monoid.
+def Address : Type 0 := Nat
+
+def Ledger : Type 0 := Address -> Nat
+
+def empty : Ledger := fun (a : Address) => 0
+
+def balance : Ledger -> Address -> Nat := fun (l : Ledger) (p : Address) => l p
+
+def credit : Ledger -> Address -> Nat -> Ledger :=
+  fun (l : Ledger) (p : Address) (n : Nat) (a : Address) =>
+    case natEq a p with
+    | 0 (u : prod ()) => l a
+    | 1 (u : prod ()) => natAdd (l a) n
+
+def Le : Nat -> Nat -> Type 0 := fun (n : Nat) (m : Nat) =>
+  (k : Nat) * EqNat (natAdd n k) m
+
+def debit : (l : Ledger) -> (p : Address) -> (n : Nat) -> (0 h : Le n (balance l p)) -> Ledger :=
+  fun (l : Ledger) (p : Address) (n : Nat) (0 h : Le n (balance l p)) (a : Address) =>
+    case natEq a p with
+    | 0 (u : prod ()) => l a
+    | 1 (u : prod ()) => natSub (l a) n
+
+-- @section 8 Claims, Escrow and the operations
+def Claim : Type 0 := prod (Address, prod (Address, Nat))
+
+mu Claims : Type 0 :=
+  | cnil : Claims
+  | ccons (h : Claim) (t : Claims) : Claims
+
+def rec foldClaims : (0 B : Type 0) -> (Claim -> B -> B) -> B -> Claims -> B :=
+  fun (0 B : Type 0) (f : Claim -> B -> B) (z : B) (cs : Claims) =>
+    match cs as w in Claims return B with
+    | cnil => z
+    | ccons h t => f h (foldClaims B f z t)
+
+def appendClaims : Claims -> Claims -> Claims :=
+  fun (xs : Claims) (ys : Claims) =>
+    foldClaims Claims (fun (h : Claim) (t : Claims) => ccons h t) ys xs
+
+def pureClaims : Claim -> Claims := fun (c : Claim) => ccons c cnil
+
+def mapClaims : (Claim -> Claim) -> Claims -> Claims :=
+  fun (f : Claim -> Claim) (xs : Claims) =>
+    foldClaims Claims (fun (h : Claim) (t : Claims) => ccons (f h) t) cnil xs
+
+def bindClaims : Claims -> (Claim -> Claims) -> Claims :=
+  fun (xs : Claims) (f : Claim -> Claims) =>
+    foldClaims Claims (fun (h : Claim) (t : Claims) => appendClaims (f h) t) cnil xs
+
+def filterClaims : (Claim -> Option (prod ())) -> Claims -> Claims :=
+  fun (p : Claim -> Option (prod ())) (xs : Claims) =>
+    foldClaims Claims
+      (fun (h : Claim) (t : Claims) =>
+        case p h with
+        | 0 (u : prod ()) => t
+        | 1 (u : prod ()) => ccons h t)
+      cnil xs
+
+def Escrow : Type 0 := prod (Ledger, Claims)
+
+def EscrowDAO : ChoiceRule -> Type 0 := fun (F : ChoiceRule) =>
+  (L : Aggregation F) * Escrow
+
+def deposit : Address -> Address -> Nat -> Escrow -> Escrow :=
+  fun (p : Address) (q : Address) (n : Nat) (s : Escrow) =>
+    tuple (credit s.0 p n, appendClaims s.1 (pureClaims (tuple (p, tuple (q, n)))))
+
+def castOrbit : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> (y : Config) -> EqTally (orbit x) (orbit y) -> EqDec (gov F L x) (gov F L y) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (y : Config) (e : EqTally (orbit x) (orbit y)) =>
+    congTD (rule F L) (orbit x) (orbit y) e
+
+def settle : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> (c : Claim) -> (s : Escrow) -> (0 h : Le c.1.1 (balance s.0 c.0)) -> Escrow :=
+  fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (c : Claim) (s : Escrow) (0 h : Le c.1.1 (balance s.0 c.0)) =>
+    decide Escrow
+      (tuple (credit (debit s.0 c.0 c.1.1 h) c.1.0 c.1.1, s.1))
+      (tuple (debit s.0 c.0 c.1.1 h, s.1))
+      s
+      s
+      (gov F L x)

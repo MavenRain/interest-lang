@@ -1,0 +1,5 @@
+def members : Nat := 1
+-- The smallest Debreu program: every configuration is release. It checks
+-- in the test domain decision-arg, but its table is TABLE_DECISION there.
+def F : ChoiceRule := fun (x : Config) => release
+def agg : Aggregation F := mkAgg F (fun (t : Tally) => release) (fun (x : Config) => reflDec release)

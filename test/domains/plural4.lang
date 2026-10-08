@@ -1,0 +1,30 @@
+def members : Nat := 3
+-- k = 4 program of the test domain k4 (test/domains.sh). `c` is the count
+-- 4-tuple (release, refund, hold, defer). `pick` compares release with
+-- defer: the larger count wins. At a tie, refund wins when its count is
+-- larger than the hold count, else hold.
+def pick : T4 -> Decision := fun (c : T4) =>
+  case natLt c.1.1.1 c.0 with
+  | 0 (u : prod ()) =>
+    (case natLt c.0 c.1.1.1 with
+     | 0 (v : prod ()) =>
+       (case natLt c.1.1.0 c.1.0 with
+        | 0 (w : prod ()) => hold
+        | 1 (w : prod ()) => refund)
+     | 1 (v : prod ()) => defer)
+  | 1 (u : prod ()) => release
+def H : Tally -> Decision := fun (t : Tally) => pick (counts t)
+
+def F : ChoiceRule := fun (x : Config) => H (orbit x)
+def agg : Aggregation F := mkAgg F H (fun (x : Config) => reflDec (H (orbit x)))
+
+def xs : Ballots := bcons release (bcons refund (bcons release bnil))
+def x : Config := mkConfig xs (reflNat 3)
+def verdictX : EqDec (gov F agg x) release := reflDec release
+def ys : Ballots := bcons defer (bcons refund (bcons defer bnil))
+def y : Config := mkConfig ys (reflNat 3)
+def verdictY : EqDec (gov F agg y) defer := reflDec defer
+def zs : Ballots := bcons hold (bcons refund (bcons refund bnil))
+def z : Config := mkConfig zs (reflNat 3)
+def verdictZ : EqDec (gov F agg z) refund := reflDec refund
+def castY : EqDec (F y) (gov F agg y) := cast F agg y
