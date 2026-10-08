@@ -1,8 +1,26 @@
 # Kit debt for lang-template
 
+Status 2026-10-08: applied in lang-template `fa1131a` (slice K2). That
+commit applies items 1 to 8 and the driver protections to
+`hosts/tcc-evm-dao` in kit form:
+
+- Items 1, 2, 4 and 5: as interest-lang has them.
+- Item 3: as interest-lang has it, but the core declares `LangDomainData`
+  in `src/evm.h` as an incomplete type, and the domain defines it.
+- Items 6 and 7: the domain hooks `lang_domain_read` and
+  `lang_domain_print` (`src/check.h`) read and print the program data. The
+  verb `data PROG` is in the core, and `build` calls `lang_domain_read`.
+  The sample domain gives NULL data, and `data` writes nothing for it.
+- Item 8: `lang_entry_amend` stays in the core, because the entry list of
+  the sample domain uses it.
+- The driver paragraph: the buffered build, the `same_file` refusal of an
+  output path that aliases the source, and the gate step
+  `test/build-output.sh`.
+
 interest-lang changed the core of the tcc-evm-dao host kit. lang-template
-`hosts/tcc-evm-dao` at `1aa27ae` does not have these changes. This list is
-for a later lang-template slice. This tree does not change lang-template.
+`hosts/tcc-evm-dao` at `1aa27ae` did not have these changes. The items
+below stay as the record of the debt. This tree does not change
+lang-template.
 
 ## Core API (`src/asm.h`, `src/evm.h`, `src/evm.c`)
 
@@ -48,3 +66,20 @@ that alias the source file, including hard links and symlinks
    entry in `domain/entries.c` that writes CHARTER. The kit can keep
    `lang_entry_amend` for a domain whose `amend` writes nothing, or move it
    to the sample domain.
+
+## Differences that remain
+
+lang-template `fa1131a` and this tree still differ in two points. Slice K3
+records them and does not change the code. A later interest-lang slice can
+remove them.
+
+- Program data. This tree keeps `lang_data` (`src/check.h`,
+  `src/check.c`), the complete `LangDomainData` (`src/evm.h`) and the
+  printer `verb_data` (`src/main.c`), which writes the start, genesis,
+  restrict, waterfall and issuers lines. The kit core calls the domain
+  hooks `lang_domain_read` and `lang_domain_print` for this work. A later
+  slice can move this tree onto the kit hooks.
+- Failed stdout writes. The kit driver reports a failed write to stdout as
+  `IO_WRITE` with exit 2, and its `test/build-output.sh` checks this. The
+  driver of this tree (`src/main.c`) calls `fflush(stdout)` and does not
+  examine the result.

@@ -35,9 +35,13 @@ milestone of SPEC section 10 is open.
 
 ## Remaining work
 
-1. Apply `docs/KIT-DEBT.md` to lang-template. It needs a lang-template
-   slice with its own gate.
-2. The first commit of this tree.
+1. Done: apply `docs/KIT-DEBT.md` to lang-template. Applied in
+   lang-template `fa1131a` (slice K2).
+2. Done: the first commit of this tree (`a2ce1b8`).
+3. Remove the two differences from the kit (`docs/KIT-DEBT.md`,
+   "Differences that remain"): move the program data onto the kit hooks
+   `lang_domain_read` and `lang_domain_print`, and report a failed stdout
+   write as `IO_WRITE`. It needs an interest-lang slice with its own gate.
 
 ## Known limits
 

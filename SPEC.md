@@ -307,5 +307,6 @@ three examples: parse 28, check 52, build output preservation 20, refusal
 49, normal forms 10,
 differential 27 and 64 vectors, domain tests 11, settlement 125 cases,
 claims 20 sequences (500 steps), 88 law calls and 70 contract checks, 0
-failures (`docs/VALIDATION.md`). The open work is in `docs/STATUS.md`: the
-kit debt of `docs/KIT-DEBT.md` and the first commit.
+failures (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
+applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
+this tree. The open work is in `docs/STATUS.md`.

@@ -54,7 +54,8 @@ The gate checks and compiles each example and runs its contract in geth
 - `probe/CAPABILITY.md`: the host probe, answered for this host.
 - `docs/STATUS.md` and `docs/VALIDATION.md`: the status and the gate
   results.
-- `docs/KIT-DEBT.md`: the core changes that lang-template does not have.
+- `docs/KIT-DEBT.md`: the core changes of this tree to the host kit,
+  applied in lang-template `fa1131a`, and the differences that remain.
 - `docs/host/README.md`: the host kit, the domain, the storage and the
   entries. `docs/host/CAPABILITY.md`: the host facts.
 
