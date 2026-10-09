@@ -223,10 +223,11 @@ def withdraw(program, s, sender, value):
 
 
 def transfer(program, s, sender, value, to, q):
-    """Settles both identities, then debit h q ; credit to q, iff R(h, to, q) and q <= mass h."""
+    """Settles both identities, then debit h q ; credit to q, iff to > 0 (MY CALL 150),
+    R(h, to, q) and q <= mass h."""
     h = identity(s, sender)
     code = None if h is None else program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
-    if h is None or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
+    if h is None or to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
         return None
     return move(s, h, to, q)
 
@@ -248,16 +249,17 @@ def issuer(program, s, sender):
 
 
 def attest(program, s, sender, value, w, h, p):
-    """A registry write by a trusted issuer of the active charter."""
-    if not issuer(program, s, sender) or w >= 2**160 or p >= 4 or h + 1 >= WORD:
+    """A registry write by a trusted issuer of the active charter; identity 0 reverts."""
+    if not issuer(program, s, sender) or w >= 2**160 or p >= 4 or h == 0 or h + 1 >= WORD:
         return None
     return dataclasses.replace(s, registry={**s.registry, w: h + 1}, profile={**s.profile, h: p}), 1
 
 
 def recover(program, s, sender, value, h, to, q):
     """ERC-1644 forced transfer by a trusted issuer of the active charter (O3): the move
-    of transfer iff q <= mass h; R does not gate it."""
-    if not issuer(program, s, sender) or h + 1 >= WORD or to + 1 >= WORD or q > s.mu.get(h, 0):
+    of transfer iff h > 0, to > 0 and q <= mass h; R does not gate it."""
+    if (not issuer(program, s, sender) or 0 in (h, to) or h + 1 >= WORD or to + 1 >= WORD
+            or q > s.mu.get(h, 0)):
         return None
     return move(s, h, to, q)
 
@@ -377,19 +379,22 @@ ARGS = dict(
 CHOICES = ('deposit',) * 4 + ('distribute',) * 3 + ('withdraw',) * 4 + ('transfer',) * 3 + (
     'attest', 'cast', 'amend', 'claimOf', 'claimOf', *VIEWS[:-len(FACADE)])
 # The draws leave out FACADE, so the sequences do not change (O5a); each sequence ends with balanceOf.
+# Transfer draws include identity 0 so the sequences check its rejection.
 # S = 1: a transfer of quantity 1 moves the whole unit.
 DIRAC_ARGS = dict(ARGS, transfer=lambda r: (r.randrange(0, 5), r.choice((0, 1, 1, 1, 2))))
 
 # The sequences must reach these successful calls (name + '+': a nonzero result).
 COVER_DEBREU = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw0', 'transfer+',
-                'attest+', 'amend+', 'cast+', 'claimOf+'}
+                'attest+', 'amend+', 'cast+', 'claimOf+', 'transfer-to-zero-revert'}
 COVER_IMPOSSIBILITY = {'deposit+', 'withdraw0'}
-COVER_ERC721 = {'deposit+', 'distribute+', 'withdraw+', 'transfer+', 'amend+', 'cast+', 'claimOf+'}
+COVER_ERC721 = {'deposit+', 'distribute+', 'withdraw+', 'transfer+', 'amend+', 'cast+', 'claimOf+',
+                'transfer-to-zero-revert'}
 # The token run (MY CALL 159): deposit(kind, a) takes a of 0 .. 40 carrier units, and each
 # call sends 1 wei with chance 1/20 (every entry is non-payable in token mode, so it reverts).
 TOKEN_ARGS = dict(ARGS, deposit=lambda r: (r.choice((0, 0, 1, 1, 2)), r.randrange(0, 41)))
 TOKEN_SEEDS, TOKEN_LENGTH = range(1, 11), 20
-COVER_TOKEN = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw0', 'transfer+', 'claimOf+'}
+COVER_TOKEN = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw0', 'transfer+', 'claimOf+',
+               'transfer-to-zero-revert'}
 
 
 def random_call(rng, args, payable=True):
@@ -409,6 +414,8 @@ def sequence(program, runtime, seed, length, args):
         label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args, not program.token)
         model = apply(program, s, call)
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
+        if call[0] == 'transfer' and call[1][0] == 0 and model is None:
+            seen.add('transfer-to-zero-revert')
         deposits += (call[1][1] if program.token else call[3]) if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
         recycled += model[0].reserve[0] - s.reserve[0] if model and call[0] == 'withdraw' else 0
@@ -692,7 +699,7 @@ def main():
     st.WORK.mkdir(parents=True, exist_ok=True)
     require(st.INTERESTC.exists(), f'{st.INTERESTC} is missing: run make')
     runs = ((DEBREU, range(1, 11), 20, COVER_DEBREU, ARGS), (IMPOSSIBILITY, range(1, 5), 15, COVER_IMPOSSIBILITY, ARGS),
-            (ERC721, range(1, 7), 40, COVER_ERC721, DIRAC_ARGS))
+            (ERC721, range(1, 7), 45, COVER_ERC721, DIRAC_ARGS))
     sequences = steps = 0
     built = {}
     for table, seeds, length, cover, args in runs:

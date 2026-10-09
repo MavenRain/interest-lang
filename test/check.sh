@@ -105,6 +105,16 @@ EOF
     "repeats wallet 4096" build "$out/genesis-duplicate.lang" -o "$out/genesis-duplicate.hex"
 done
 
+# Identity 0 is no identity: the registry stores identity + 1 (MY CALL 150 (b)).
+cat > "$out/genesis-identity-0.lang" <<'EOF'
+def members : Nat := 3
+def genesis : Holders := hrow 4096 0 (tuple (domestic, retail)) 2 hnil
+EOF
+refuse "genesis identity 0 data" CONTRACT_GENESIS genesis \
+  "has a row with identity 0" data "$out/genesis-identity-0.lang"
+refuse "genesis identity 0 build" CONTRACT_GENESIS genesis \
+  "has a row with identity 0" build "$out/genesis-identity-0.lang" -o "$out/genesis-identity-0.hex"
+
 # Erased Sigma fields may be constructed from erased variables and used
 # in types, while the second field remains available at run time.
 cat > "$out/erased-sigma.lang" <<'EOF'

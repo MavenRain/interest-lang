@@ -79,6 +79,10 @@ def transferZero : EqNat (mass z.0 1) (mass s0.0 1) := reflNat 5
 def sFrozen : InterestState := tuple (m1, tuple (frozen, t0))
 def transferFrozen : EqNat (mass (stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 1) 3 := reflNat 3
 
+-- transfer to identity 0 is none (no identity): the fallback s1 keeps
+-- identity 0 at mass 0.
+def transferNoIdentity : EqNat (mass (stateOr s1 (transfer restrict prof 1 0 2 s0 e2)).0 0) 0 := reflNat 0
+
 -- deposit, then amend: the charter becomes `gov F agg y` = open; the mass
 -- and the treasury do not change.
 def s2 : InterestState := deposit rent 7 s1

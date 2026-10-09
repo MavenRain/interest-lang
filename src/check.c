@@ -1632,6 +1632,10 @@ static void data_genesis(C *c, Value *v, LangDomainData *data) {
         return;
       }
     h->identity = data_nat(c, v->args[1], "genesis");
+    if (!c->failed && h->identity == 0) {
+      refuse(c, "CONTRACT_GENESIS", "genesis", "has a row with identity 0");
+      return;
+    }
     h->profile = data_profile(c, v->args[2], "genesis");
     h->units = data_nat(c, v->args[3], "genesis");
     if (h->units > ULLONG_MAX - total) {

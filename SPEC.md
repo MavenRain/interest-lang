@@ -174,7 +174,7 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 
 | Operation | Type | Meaning (design section "Operations are homomorphisms") |
 |---|---|---|
-| `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `R(h, k, q)` and `q <= mass h`; otherwise `none`. Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
+| `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `k > 0`, `R(h, k, q)` and `q <= mass h`; otherwise `none` (identity 0 is no identity, O5b). Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
 | `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` asset units. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance >= sum of the claims + dust + S * (reserve[rent] + reserve[sale])`, where `balance` is the asset balance of the contract (the wei balance, or `balanceOf(this)` of the carrier); the two sides are equal when no direct transfer adds to the balance |
@@ -210,8 +210,9 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   storage from the program: the `genesis` list of (wallet, identity,
   profile, units), the supply `S` (the sum of the units, fixed), and the
   active charter (the `start` charter of the program, O6). Then it returns
-  the runtime code. Repeated genesis wallets are refused with
-  `CONTRACT_GENESIS`; distinct wallets may share an identity.
+  the runtime code. Repeated genesis wallets and a
+  genesis row with identity 0 are refused with `CONTRACT_GENESIS`;
+  distinct wallets may share an identity.
   In token mode (`asset token`, O5b), the creation code first reads the
   constructor word, the last 32 bytes of the init code, as the carrier
   address. A missing or extra word, the word 0, a word with a bit above
@@ -251,11 +252,14 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
-  guard reverts. A refused transfer (R fails, `q > mass h`, or `to + 1`
-  overflows the registry encoding) reverts and
-  leaves the state unchanged. A refused recovery (the caller is not an
-  issuer of the active charter, `q > mass from`, or `from + 1` or `to + 1`
-  overflows the registry encoding) reverts and leaves the state unchanged.
+  guard reverts. A refused transfer (R fails, `q > mass h`, `to = 0`, or
+  `to + 1` overflows the registry encoding) reverts and leaves the state
+  unchanged. A refused recovery (the caller is not an issuer of the
+  active charter, `q > mass from`, `from = 0` or `to = 0`, or `from + 1`
+  or `to + 1` overflows the registry encoding) reverts and leaves the
+  state unchanged. `attest` reverts at `h = 0`. Identity 0 is no
+  identity: the registry keeps `h + 1`, so the word 0 means that the
+  wallet has no identity (O5b).
   Like `transfer`, `recover` settles both identities before it moves `mu`.
   An entry of section 6 that has no meaning in
   the regime reverts.
@@ -375,10 +379,10 @@ lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
 cases. After O5b (2026-10-09), `make check` passes on the interest-lang
-domain and the four examples: parse 28, check 56, build output 29, EVM
+domain and the four examples: parse 28, check 58, build output 29, EVM
 boundaries 4, refusal 49, normal forms 10, differential 27 and 64 vectors,
-domain tests 11, settlement 209 cases with 9 deploys (214 EVM calls under
-the gas ceiling of `test/gas-baseline.txt`), claims 20 sequences (500
+domain tests 11, settlement 213 cases with 9 deploys (218 EVM calls under
+the gas ceiling of `test/gas-baseline.txt`), claims 20 sequences (530
 steps), 100 law calls and 87 contract checks, and a token run of 10
 sequences (200 steps), 0 failures
 (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is

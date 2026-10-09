@@ -10,12 +10,12 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `build/parsetool`, `build/evm-boundaries` and the three test-domain
 compilers with tcc, compiles the sources and the test tools with the C
 compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
-gate runs these steps: parse 28 round trips, embed-safety, check 56 cases,
+gate runs these steps: parse 28 round trips, embed-safety, check 58 cases,
 build output 29 checks, EVM signature boundaries 4 checks, refusal 49
 cases, normal forms 10, the differential test (27 vectors at k = 3),
 domain tests 11, the differential test of the k = 4 domain (64 vectors),
-settlement 209 cases with 9 deploys and a gas ceiling on their 214 EVM
-calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 500
+settlement 213 cases with 9 deploys and a gas ceiling on their 218 EVM
+calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 530
 steps, 100 law calls, 87 contract checks, and a token run of 10
 sequences totaling 200 steps).
 Then it looks for an em-dash or an en-dash in the kit. The result is
@@ -187,6 +187,26 @@ mutants make the gate fail: a `withdraw` that ignores the result of
 `transfer` (`example-debreu-token-withdraw-token-revert` fails first),
 and a `deposit` that skips the balance delta check
 (`example-debreu-token-deposit-token-fee` fails first).
+
+In slice O5b, identity 0 became no identity: the registry keeps
+`h + 1`, so the word 0 means that a wallet has no identity. The checker
+refuses a genesis row with identity 0, and `test/check.sh` has 2 new
+rows (check went from 56 to 58). The contract reverts a `transfer` to 0,
+a `recover` from or to 0 and an `attest` of 0. `test/settlement.py` has
+4 new revert cases (transfer-to-zero, attest-identity-zero,
+recover-to-zero, recover-from-zero), so its cases went to 213 and the
+gas ceiling to 218 calls. Each new guard adds 22 gas on the calls that
+go past it (44 for `recover`), 6 deploy lines grew with the runtime
+code, and no gas line went down. The language `transfer` is none at
+`k = 0`, and `examples/arrow-debreu.lang` checks the law
+`transferNoIdentity`. The claims model refuses the same calls, and its
+random transfers draw `to` in 0 to 4. The native Debreu, ERC-721 and
+token sequences each require a rejected transfer to identity 0 in
+their coverage. The ERC-721 sequences run 45 steps each so the restored
+zero destinations retain the successful-transfer coverage, for 530
+native steps in total. One mutant makes the gate fail: a
+`transfer` without the guard at `to = 0`
+(`example-debreu-transfer-to-zero` fails first).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

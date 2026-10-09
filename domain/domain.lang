@@ -441,12 +441,16 @@ def castOrbit : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> (y : 
 
 -- `transfer R P h k q s e`: q units move from h to k when the restriction
 -- of the active charter admits q from the profile of h to the profile of
--- k, else none.  `e` is the erased proof `q <= mass h`.
+-- k and k is not 0 (identity 0 is no identity, MY CALL 150 (b)), else
+-- none.  `e` is the erased proof `q <= mass h`.
 def transfer : (R : Charter -> Restriction) -> (P : Profiles) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass s.0 h)) -> Option InterestState :=
   fun (R : Charter -> Restriction) (P : Profiles) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass s.0 h)) =>
     case admits (R s.1.0 (P h) (P k)) q with
     | 0 (u : prod ()) => none InterestState
-    | 1 (u : prod ()) => pureOption InterestState (tuple (credit (debit s.0 h q e) k q, s.1))
+    | 1 (u : prod ()) =>
+      case natEq k 0 with
+      | 0 (v : prod ()) => pureOption InterestState (tuple (credit (debit s.0 h q e) k q, s.1))
+      | 1 (v : prod ()) => none InterestState
 
 -- `deposit i a s`: the reserve of kind `i` grows by `a`.  The measure and
 -- the charter do not change.

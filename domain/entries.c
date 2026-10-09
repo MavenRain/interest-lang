@@ -508,17 +508,22 @@ static void transfer_log(Asm *a) {
 }
 
 /* transfer to q: h = id(CALLER); q >= R[CHARTER][PROFILE h][PROFILE to]
- * reverts; q > MU[h] or to + 1 overflow reverts; settle h, then settle to (SPEC 5: checkpoints
+ * reverts; to = 0, q > MU[h] or to + 1 overflow reverts; settle h, then
+ * settle to (SPEC 5: checkpoints
  * both identities); MU[h] -= q, then MU[to] += q (read after the debit, so
  * to = h keeps the mass); logs Transfer(h, to, q), also at q = 0 and at
  * to = h (O5a); returns 1. */
 static void transfer(Asm *a, const EntryContext *c) {
   (void)c;
-  /* Every destination must admit the registry encoding identity + 1. */
+  /* Every destination must admit the registry encoding identity + 1, and
+   * identity 0 is no identity (MY CALL 150 (b)). */
   asm_argument(a, 0);
   asm_push(a, 1);
   asm_checked_add(a);
   asm_op(a, OP_POP);
+  asm_argument(a, 0);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
   caller_identity(a);
   asm_store(a, MEM_ID);
   asm_argument(a, 0);
@@ -604,11 +609,14 @@ static void issuer_guard(Asm *a, const EntryContext *c) {
   asm_jumpdest(a, issuer);
 }
 
-/* attest w h p: the issuer guard; w >= 2^160 or p > 3 reverts;
+/* attest w h p: the issuer guard; w >= 2^160, h = 0 or p > 3 reverts;
  * REGISTRY[w] := h + 1 (checked); PROFILE[h] := p; returns 1. */
 static void attest(Asm *a, const EntryContext *c) {
   issuer_guard(a, c);
   asm_address_guard(a, 0);
+  asm_argument(a, 1);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
   asm_push(a, LANG_PROFILES - 1);
   asm_argument(a, 2);
   asm_op(a, OP_GT);
@@ -628,7 +636,8 @@ static void attest(Asm *a, const EntryContext *c) {
 }
 
 /* recover from to q (ERC-1644 forced transfer, O3): the issuer guard;
- * from + 1 or to + 1 overflow reverts; q > MU[from] reverts; R does not
+ * from = 0, to = 0, from + 1 or to + 1 overflow reverts; q > MU[from]
+ * reverts; R does not
  * gate it; settle from, then settle to; MU[from] -= q, then MU[to] += q
  * (read after the debit, so to = from keeps the mass); logs
  * Transfer(from, to, q) (O5a); returns 1. */
@@ -639,6 +648,9 @@ static void recover(Asm *a, const EntryContext *c) {
     asm_push(a, 1);
     asm_checked_add(a);
     asm_op(a, OP_POP);
+    asm_argument(a, j);
+    asm_op(a, OP_ISZERO);
+    asm_revert_if(a);
   }
   asm_argument(a, 0);
   asm_slot(a, SLOT_MU);
