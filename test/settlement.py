@@ -225,6 +225,7 @@ def default_cases(runtime, regime, constituting):
             ('deposit-kind', data('deposit', 2), before, None, None, 1, SENDER),
             ('transfer', data('transfer', 1, 1), before, None, None, 0, SENDER),
             ('attest', data('attest', 4099, 3, 1), before, None, None, 0, SENDER),
+            ('recover', data('recover', 0, 1, 1), before, None, None, 0, SENDER),
             ('supply', data('supply'), before, None, 0, 0, SENDER),
             ('charter', data('charter'), before, None, 1, 0, SENDER),
             ('self', data('selfConstituting'), before, None, constituting, 0, SENDER),
@@ -273,6 +274,18 @@ def debreu_example_cases():
             ('attest-wallet', data('attest', 2**160, 3, 2), base, None, None, 0, one),
             ('attest-profile', data('attest', 4099, 3, 4), base, None, None, 0, one),
             ('attest-identity-wrap', data('attest', 4099, 2**256 - 1, 0), base, None, None, 0, one),
+            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2}, 1, 0, one),
+            ('recover-open', data('recover', 2, 1, 5), opened, {**opened, mu1: 10, mu2: 0}, 1, 0, one),
+            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10}, 1, 0, one),
+            ('recover-self', data('recover', 2, 2, 3), base, None, 1, 0, one),
+            ('recover-over-mass', data('recover', 2, 3, 6), base, None, None, 0, one),
+            ('recover-non-issuer', data('recover', 1, 2, 1), base, None, None, 0, two),
+            ('recover-frozen', data('recover', 2, 3, 1), frozen, None, None, 0, one),
+            ('recover-no-identity', data('recover', 2, 3, 1), base, None, None, 0, SENDER),
+            ('recover-identity-wrap', data('recover', 2, 2**256 - 1, 1), base, None, None, 0, one),
+            ('recover-from-wrap', data('recover', 2**256 - 1, 3, 0), base, None, None, 0, one),
+            ('recover-value', data('recover', 2, 3, 1), base, None, None, 1, one),
+            ('recover-short', data('recover', 2, 3, 1)[:-2], base, None, None, 0, one),
             ('mass-1', data('mass', 1), base, None, 5, 0, SENDER),
             ('mass-none', data('mass', 3), base, None, 0, 0, SENDER),
             ('supply', data('supply'), base, None, 10, 0, SENDER),
@@ -339,7 +352,8 @@ def accrual_cases(runtime, base):
 
 def impossibility_example_cases():
     """examples/arrow-impossibility.lang: identity 1 (wallet 4096, 5 units) issues at every
-    charter; identity 2 (wallet 4097) holds 0 units; no transfer, cast or amend entry."""
+    charter; identity 2 (wallet 4097) holds 0 units; no transfer, recover, cast or amend
+    entry."""
     runtime = program_code('example-impossibility', IMPOSSIBILITY)
     base = data_storage(IMPOSSIBILITY)
     one, two = wallet(4096), wallet(4097)
@@ -348,6 +362,7 @@ def impossibility_example_cases():
              {**base, slot(REGISTRY, 4099): 4, slot(PROFILE, 3): 1}, 1, 0, one),
             ('attest-non-issuer', data('attest', 4099, 3, 1), base, None, None, 0, two),
             ('transfer', data('transfer', 2, 1), base, None, None, 0, one),
+            ('recover', data('recover', 1, 2, 1), base, None, None, 0, one),
             ('cast', data('cast', 1, 1, 1), base, None, None, 0, one),
             ('amend', data('amend', 1, 1, 1), base, None, None, 0, one),
             ('mass', data('mass', 1), base, None, 5, 0, SENDER),

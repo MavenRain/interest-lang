@@ -9,7 +9,8 @@ operation sequence runs in geth `evm run`, one call per step on the post-state o
 step before, and each step must equal the model. After each step the SPEC M2 laws hold
 on the geth state: conservation, sum to inflow, and the charter changes only at amend.
 Then law vectors (transfer then distribute equals distribute on the image, amend moves
-neither mu nor the treasury, impossibility reverts leave the state unchanged, R
+neither mu nor the treasury, recover moves mu but no claim and not the treasury,
+impossibility reverts leave the state unchanged, R
 rejections revert) and the contract half of the refusal list (no mint, burn, balanceOf,
 allowance, charter-write or issuer-write selector; withdraw keeps num mod S). Uses the
 harness of settlement.py."""
@@ -26,7 +27,7 @@ from settlement import (CHARTER, CHECKPOINT, INDEX, MU, NUM, PROFILE, REGISTRY, 
 
 WORD = 2**256
 BASE = 10**24
-WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, cast=3, amend=3,
+WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=3, cast=3, amend=3,
              mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0)
 VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting')
 IDENTITIES = range(5)
@@ -72,7 +73,7 @@ class Program:
 DEBREU = Program(
     'debreu', st.DEBREU, 2, ((4096, 1, 0, 5), (4097, 2, 3, 3), (4098, 2, 3, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
-    ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'cast', 'amend', 'mass',
+    ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'mass',
      'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting'), 1)
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
@@ -182,6 +183,11 @@ def transfer(program, s, sender, value, to, q):
     code = None if h is None else program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
     if h is None or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
         return None
+    return move(s, h, to, q)
+
+
+def move(s, h, to, q):
+    """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu)."""
     first = settle(s, h)
     second = None if first is None else settle(first, to)
     if second is None:
@@ -190,12 +196,25 @@ def transfer(program, s, sender, value, to, q):
     return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}), 1
 
 
+def issuer(program, s, sender):
+    """The caller identity is an issuer of the active charter."""
+    c = identity(s, sender)
+    return c is not None and (s.charter, c) in program.issuers
+
+
 def attest(program, s, sender, value, w, h, p):
     """A registry write by a trusted issuer of the active charter."""
-    c = identity(s, sender)
-    if c is None or (s.charter, c) not in program.issuers or w >= 2**160 or p >= 4 or h + 1 >= WORD:
+    if not issuer(program, s, sender) or w >= 2**160 or p >= 4 or h + 1 >= WORD:
         return None
     return dataclasses.replace(s, registry={**s.registry, w: h + 1}, profile={**s.profile, h: p}), 1
+
+
+def recover(program, s, sender, value, h, to, q):
+    """ERC-1644 forced transfer by a trusted issuer of the active charter (O3): the move
+    of transfer iff q <= mass h; R does not gate it."""
+    if not issuer(program, s, sender) or h + 1 >= WORD or to + 1 >= WORD or q > s.mu.get(h, 0):
+        return None
+    return move(s, h, to, q)
 
 
 def cast(program, s, sender, value, *ballots):
@@ -220,7 +239,7 @@ def view(name):
 
 
 OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=transfer,
-           attest=attest, cast=cast, amend=amend, **{name: view(name) for name in VIEWS})
+           attest=attest, recover=recover, cast=cast, amend=amend, **{name: view(name) for name in VIEWS})
 
 
 def apply(program, s, call):
@@ -384,15 +403,37 @@ def amend_law(program, runtime):
     return count
 
 
+def recover_law(program, runtime):
+    """At a rich state, the issuer moves the whole mass of each identity to each identity:
+    on geth the masses sum to S, mu moves by q, and every claim, both reserves, INDEX and
+    the wei do not change. A recover by a non-issuer reverts and moves nothing."""
+    s, count = rich_debreu(program), 0
+    treasury = lambda words: (words.get(slot(RESERVE, 0), 0), words.get(slot(RESERVE, 1), 0), words.get(INDEX, 0))
+    for h, to in itertools.product((1, 2, 3), repeat=2):
+        q = s.mu.get(h, 0)
+        words, balance = check_step(f'law-recover-{h}-{to}', program, runtime, s, at(s),
+                                    ('recover', (h, to, q), wallet(4096), 0))[1]
+        moved = {k: words.get(slot(MU, k), 0) - s.mu.get(k, 0) for k in IDENTITIES}
+        wanted = {k: (q if k == to else 0) - (q if k == h else 0) for k in IDENTITIES}
+        require(sum(words.get(slot(MU, k), 0) for k in IDENTITIES) == program.supply and moved == wanted
+                and geth_claims(words) == geth_claims(storage(s)) and treasury(words) == treasury(storage(s))
+                and balance == s.balance, f'law-recover {h} {to} {q}: recover moved a claim or the treasury')
+        count += 1
+    chain = check_step('law-recover-non-issuer', program, runtime, s, at(s), ('recover', (1, 2, 1), wallet(4097), 0))[1]
+    require(chain == at(s), 'law-recover-non-issuer: the state moved')
+    return count + 1
+
+
 def impossibility_reverts(program, runtime):
-    """At impossibility the aggregation has no inhabitant: cast, amend, distribute and
-    transfer revert with empty output, and the storage and the wei do not change."""
+    """At impossibility the aggregation has no inhabitant: cast, amend, distribute,
+    transfer and recover revert with empty output, and the storage and the wei do not
+    change."""
     one = wallet(4096)
     s = play(program, genesis(program), [('deposit', (0,), SENDER, 7), ('deposit', (1,), one, 3),
                                          ('attest', (4099, 3, 2), one, 0), ('withdraw', (), one, 0)])
     calls = (('cast', (1, 1, 1), one, 0), ('amend', (1, 1, 1), one, 0), ('amend', (3, 3, 3), SENDER, 0),
              ('distribute', (0,), one, 0), ('distribute', (1,), SENDER, 0), ('transfer', (2, 0), one, 0),
-             ('transfer', (2, 1), one, 0))
+             ('transfer', (2, 1), one, 0), ('recover', (1, 2, 1), one, 0))
     for number, call in enumerate(calls):
         chain = check_step(f'law-impossible-{number}', program, runtime, s, at(s), call)[1]
         require(apply(program, s, call) is None and chain == at(s), f'law-impossible {call}: the state moved')
@@ -523,7 +564,8 @@ def main():
             sequences, steps = sequences + 1, steps + length
         require(cover <= seen, f'{program.name}: the sequences miss {sorted(cover - seen)}')
     debreu, impossible, erc721 = built['debreu'], built['impossibility'], built['erc721']
-    laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + impossibility_reverts(*impossible)
+    laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
+            + impossibility_reverts(*impossible)
             + r_rejections(*debreu) + dirac_vectors(*erc721))
     contract = (withdraw_keeps_remainder(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))

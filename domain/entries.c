@@ -335,10 +335,9 @@ static void transfer(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-/* attest w h p: (CHARTER, id(CALLER)) must be an issuer pair (an unrolled
- * compare chain over the pairs of the program); w >= 2^160 or p > 3
- * reverts; REGISTRY[w] := h + 1 (checked); PROFILE[h] := p; returns 1. */
-static void attest(Asm *a, const EntryContext *c) {
+/* Reverts unless (CHARTER, id(CALLER)) is an issuer pair (an unrolled
+ * compare chain over the pairs of the program). */
+static void issuer_guard(Asm *a, const EntryContext *c) {
   Label issuer = asm_label(a);
   caller_identity(a);
   asm_store(a, MEM_ID);
@@ -360,6 +359,12 @@ static void attest(Asm *a, const EntryContext *c) {
   }
   asm_jump(a, LABEL_REVERT);
   asm_jumpdest(a, issuer);
+}
+
+/* attest w h p: the issuer guard; w >= 2^160 or p > 3 reverts;
+ * REGISTRY[w] := h + 1 (checked); PROFILE[h] := p; returns 1. */
+static void attest(Asm *a, const EntryContext *c) {
+  issuer_guard(a, c);
   asm_address_guard(a, 0);
   asm_push(a, LANG_PROFILES - 1);
   asm_argument(a, 2);
@@ -374,6 +379,49 @@ static void attest(Asm *a, const EntryContext *c) {
   asm_argument(a, 2);
   asm_argument(a, 1);
   asm_slot(a, SLOT_PROFILE);
+  asm_op(a, OP_SSTORE);
+  asm_push(a, 1);
+  asm_return_top(a);
+}
+
+/* recover from to q (ERC-1644 forced transfer, O3): the issuer guard;
+ * from + 1 or to + 1 overflow reverts; q > MU[from] reverts; R does not
+ * gate it; settle from, then settle to; MU[from] -= q, then MU[to] += q
+ * (read after the debit, so to = from keeps the mass); returns 1. */
+static void recover(Asm *a, const EntryContext *c) {
+  issuer_guard(a, c);
+  for (unsigned j = 0; j < 2; j++) {
+    asm_argument(a, j);
+    asm_push(a, 1);
+    asm_checked_add(a);
+    asm_op(a, OP_POP);
+  }
+  asm_argument(a, 0);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_SLOAD);
+  asm_argument(a, 2);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  asm_argument(a, 0);
+  settle(a);
+  asm_argument(a, 1);
+  settle(a);
+  asm_argument(a, 0);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  asm_argument(a, 2);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SUB);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
+  asm_argument(a, 1);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  asm_argument(a, 2);
+  asm_checked_add(a);
+  asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
   asm_push(a, 1);
   asm_return_top(a);
@@ -461,6 +509,7 @@ static const Entry debreu[] = {
   {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw},
   {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer},
   {"attest", 3, 0, ENTRY_NONPAYABLE, attest},
+  {"recover", 3, 0, ENTRY_NONPAYABLE, recover},
   {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast},
   {"amend", 0, 1, ENTRY_NONPAYABLE, amend},
   {"mass", 1, 0, ENTRY_NONPAYABLE, mass},

@@ -24,8 +24,8 @@ milestone of SPEC section 10 is open.
   `restrict`, `waterfall` and `issuers`, read by name and type, and the
   verb `interestc data` (slice I3).
 - The contract entries of SPEC section 7 in `domain/entries.c`:
-  `deposit`, `distribute`, `withdraw`, `transfer`, `attest`, `cast`,
-  `amend` and the views `mass`, `supply`, `claimOf`, `charter`, `reserve`,
+  `deposit`, `distribute`, `withdraw`, `transfer`, `attest`, `recover`
+  (slice O3), `cast`, `amend` and the views `mass`, `supply`, `claimOf`, `charter`, `reserve`,
   `selfConstituting`. The creation code writes the genesis storage
   (slice I3).
 - The reference model and the differential test `test/claims.py`:

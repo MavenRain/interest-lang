@@ -13,8 +13,8 @@ sources and the test tools with the C compiler as a second check
 embed-safety, check 52 cases, build output 27 checks, refusal
 49 cases, normal forms 10, the
 differential test (27 vectors at k = 3), domain tests 11, the differential
-test of the k = 4 domain (64 vectors), settlement 125 cases with 4 deploys,
-and claims (20 sequences totaling 500 steps, 88 law calls, 70 contract checks).
+test of the k = 4 domain (64 vectors), settlement 140 cases with 4 deploys,
+and claims (20 sequences totaling 500 steps, 99 law calls, 70 contract checks).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
 with `make clean`.

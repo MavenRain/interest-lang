@@ -170,7 +170,7 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
-| `recover` | not in M0 to M3 (O3) | ERC-1644 forced recovery. It denotes only when `(Gov L).obj X` authorizes it. R does not gate it, and it does not quotient through the voter orbit |
+| `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3). `some (debit h q ; credit k q)` if and only if `c` is a trusted issuer (`I`) of the active charter and `q <= mass h`; otherwise `none`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
 
 Transfer then distribute: the claim travels with the token. Before a
 transfer moves `mu`, the contract checkpoints both identities: it settles
@@ -212,7 +212,7 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   from the ballot counts.
 - **Entries.** `deposit(kind)` is payable. The other entries are
   `distribute(kind)`, `withdraw()`, `transfer(to, q)`, `attest(w, h, p)`,
-  `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
+  `recover(from, to, q)`, `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
   `claimOf(h)`, `charter()`, `reserve(kind)` and `selfConstituting()` (a
   constant that the compiler computes). Each argument is a `uint256` word.
   The compiler computes each selector as `keccak256` of the signature.
@@ -223,7 +223,11 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   entry reverts on value. An erased proof becomes a guard, and a failed
   guard reverts. A refused transfer (R fails, `q > mass h`, or `to + 1`
   overflows the registry encoding) reverts and
-  leaves the state unchanged. An entry of section 6 that has no meaning in
+  leaves the state unchanged. A refused recovery (the caller is not an
+  issuer of the active charter, `q > mass from`, or `from + 1` or `to + 1`
+  overflows the registry encoding) reverts and leaves the state unchanged.
+  Like `transfer`, `recover` settles both identities before it moves `mu`.
+  An entry of section 6 that has no meaning in
   the regime reverts.
 - **Withdraw.** `withdraw` writes the new numerator before the CALL that
   pays the wei.
@@ -258,6 +262,14 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 - O2. Ballot authentication and tallies weighted by `mu`. escrow-lang has one
   unweighted ballot for each member.
 - O3. The forced recovery entry (ERC-1644) and its authorization object.
+  RULED 2026-10-08 (USER): the issuer table of the active charter (the
+  table that gates `attest`) authorizes `recover`. There is no new storage,
+  definition or `data` line. `recover(from, to, q)` is an Arrow-Debreu
+  entry, and R does not gate it. At `frozen`, `examples/arrow-debreu.lang`
+  has no issuer, so `recover` reverts. The settlement cases
+  `example-debreu-recover-issuer`, `example-debreu-recover-non-issuer`,
+  `example-debreu-recover-r-free` and `example-impossibility-recover` and
+  the claims law calls `law-recover-*` pin this ruling.
 - O4. ERC-1400 partitions: a coproduct of measures with one R for each
   partition. This is a later milestone. M0 to M3 have one partition and an
   ERC-3643-shaped registry. The ERC-721 shape is an example program with
@@ -307,11 +319,11 @@ Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
-cases. After I6, `make check` passes on the interest-lang domain and the
+cases. After O3, `make check` passes on the interest-lang domain and the
 three examples: parse 28, check 52, build output 27, refusal 49, normal
 forms 10,
-differential 27 and 64 vectors, domain tests 11, settlement 125 cases,
-claims 20 sequences (500 steps), 88 law calls and 70 contract checks, 0
+differential 27 and 64 vectors, domain tests 11, settlement 140 cases,
+claims 20 sequences (500 steps), 99 law calls and 70 contract checks, 0
 failures (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
 applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
 this tree. I6 removed the two differences from the kit that
