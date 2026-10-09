@@ -46,6 +46,7 @@ refuse() {
 }
 
 expect "check arrow-debreu" 0 "ok debreu" check "$programs/arrow-debreu.lang"
+expect "check arrow-debreu-token" 0 "ok debreu" check "$programs/arrow-debreu-token.lang"
 expect "check arrow-impossibility" 0 "ok impossibility" check "$programs/arrow-impossibility.lang"
 expect "table arrow-debreu" 0 "debreu 3 3 3 2 2 3 3 2 1 1 1" table "$programs/arrow-debreu.lang"
 expect "table arrow-impossibility" 0 "impossibility 3" table "$programs/arrow-impossibility.lang"
@@ -165,6 +166,13 @@ genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
 restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pr rr
 issuers 1:1 2:1" data "$programs/arrow-debreu.lang"
+expect "data of arrow-debreu-token" 0 "start 2
+charters 3
+genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
+restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+waterfall pp pr rr
+issuers 1:1 2:1
+asset token" data "$programs/arrow-debreu-token.lang"
 expect "data of arrow-impossibility" 0 "start 1
 charters 3
 genesis 4096:1:0:5 4097:2:0:0
@@ -180,6 +188,9 @@ issuers 1:1 2:1" data "$programs/erc721-dirac.lang"
 printf 'def members : Nat := 1\ndef start : Nat := 1\n' > "$out/start-nat.lang"
 refuse "a program def start of another type is CONTRACT_TYPE" CONTRACT_TYPE start \
   "does not have its program data type (SPEC section 7)" data "$out/start-nat.lang"
+printf 'def members : Nat := 1\ndef asset : Nat := 1\n' > "$out/asset-nat.lang"
+refuse "a program def asset of another type is CONTRACT_TYPE" CONTRACT_TYPE asset \
+  "does not have its program data type (SPEC section 7)" data "$out/asset-nat.lang"
 
 # Each append of a list to itself doubles it; the evaluation of the long
 # appends nests past the depth cap, and the run stops with TYPE_FUEL.

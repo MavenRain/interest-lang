@@ -56,6 +56,8 @@ done
 
 cp "$out/good.lang" "$out/source.lang"
 status "source as output" 2 "$interestc" build "$out/source.lang" -o "$out/source.lang"
+status "token example build" 0 "$interestc" build "$root/examples/arrow-debreu-token.lang" -o "$out/token-creation.hex"
+status "token example runtime build" 0 "$interestc" build "$root/examples/arrow-debreu-token.lang" --runtime -o "$out/token-runtime.hex"
 same "source preserved" "$out/good.lang" "$out/source.lang"
 for alias in hardlink symlink; do
   cp "$out/good.lang" "$out/source.lang"

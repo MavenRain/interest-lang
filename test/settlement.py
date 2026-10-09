@@ -24,12 +24,14 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                nonce='0x0000000000000000', timestamp='0x0', number='0x0',
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
-MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST = range(9)
+MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER = range(10)
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
 DEBREU = ROOT / 'examples/arrow-debreu.lang'
+DEBREU_TOKEN = ROOT / 'examples/arrow-debreu-token.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
+TOKEN = '00' * 19 + 'b1'
 SIGNATURES = {'balanceOf': 'balanceOf(address)'}
 TRANSFER = 'Transfer(address,address,uint256)'
 PAID = 'Paid(uint256,address,uint256,uint256)'
@@ -131,11 +133,17 @@ def log_record(lines):
     return (head[1].lower().removeprefix('0x'), tuple(t[1] for t in topics), data)
 
 
-def run(name, code, calldata, *, before=None, value=0, create=False, sender=SENDER, balance=0):
+def hexed(store):
+    return {f'0x{k:064x}': f'0x{v:064x}' for k, v in store.items() if v}
+
+
+def run(name, code, calldata, *, before=None, value=0, create=False, sender=SENDER, balance=0, token=None):
+    """TOKEN: None, or the (address, code, storage) of one more account, the carrier (O5b).
+    The status comes from the depth-1 rows only: a reverted inner call writes a depth-2 error row."""
+    carrier = {} if token is None else {token[0]: dict(balance='0x0', code='0x' + token[1], storage=hexed(token[2]))}
     state = dict(GENESIS, alloc={
         sender: dict(balance=hex(10**24)),
-        RECEIVER: dict(balance=hex(balance), storage={f'0x{k:064x}': f'0x{v:064x}'
-                                               for k, v in (before or {}).items() if v})})
+        RECEIVER: dict(balance=hex(balance), storage=hexed(before or {})), **carrier})
     genesis = WORK / (name + '-prestate.json')
     genesis.write_text(json.dumps(state))
     argv = ['evm', '--verbosity', '0', 'run', '--prestate', str(genesis), '--gas', str(GAS),
@@ -155,11 +163,14 @@ def run(name, code, calldata, *, before=None, value=0, create=False, sender=SEND
     USED[name] = int(records[-2]['gasUsed'], 16)
     stores = {key.lower().removeprefix('0x'): words(account.get('storage', {}))
               for key, account in records[-1]['accounts'].items()}
-    return dict(status='revert' if errors else 'success',
+    outer = [row for row in records if row.get('error') and row.get('depth', 1) == 1]
+    return dict(status='revert' if outer else 'success',
                 output=records[-2]['output'].lower().removeprefix('0x'),
                 logs=log_records(result.stderr),
                 storage=stores.get(RECEIVER, {}),
-                created={key: value for key, value in stores.items() if value and key != RECEIVER},
+                token={} if token is None else stores.get(token[0], {}),
+                created={key: value for key, value in stores.items()
+                         if value and key not in (RECEIVER, *(token or ())[:1])},
                 balances={key.lower().removeprefix('0x'): int(str(account.get('balance', '0')), 0)
                           for key, account in records[-1]['accounts'].items()})
 
@@ -232,9 +243,10 @@ def amend_pins():
     return 2
 
 
-def deploy(name, creation, runtime, storage, logs=()):
-    """LOGS: the (identity, units) of each genesis Transfer record, in genesis order."""
-    made = run(name, creation, '', create=True)
+def deploy(name, creation, runtime, storage, logs=(), *, suffix='', token=None):
+    """LOGS: the (identity, units) of each genesis Transfer record, in genesis order. SUFFIX: the
+    constructor word after the init code (token mode); TOKEN: the carrier account of run."""
+    made = run(name, creation + suffix, '', create=True, token=token)
     require(made['status'] == 'success' and made['output'] == runtime,
             f'{name}: creation did not return the runtime')
     written = list(made['created'].values())
@@ -242,7 +254,7 @@ def deploy(name, creation, runtime, storage, logs=()):
             f'{name}: genesis storage {written} != [{storage}]')
     wanted = [transfer_log(0, h, units, address) for address in made['created'] for h, units in logs]
     require(made['logs'] == wanted, f'{name}: genesis logs {made["logs"]} != {wanted}')
-    paid = run(name + '-value', creation, '', value=1, create=True)
+    paid = run(name + '-value', creation + suffix, '', value=1, create=True, token=token)
     require(paid['status'] == 'revert' and paid['output'] == '' and paid['logs'] == [], f'{name}: creation took a value')
 
 
@@ -283,17 +295,19 @@ def data_logs(program, binary=None):
     return [(h, u) for h, u in sums if u]
 
 
-def program_code(name, program, logs=None):
+def program_code(name, program, logs=None, *, suffix='', token=None):
     """Deploys the creation code of `interestc build PROGRAM` against its data; -> the runtime.
-    LOGS: the genesis records (None: data_logs of PROGRAM)."""
+    LOGS: the genesis records (None: data_logs of PROGRAM). SUFFIX (token mode): the constructor
+    word, which the genesis writes to CARRIER; TOKEN: the carrier account of run."""
     def part(label, *flags):
         out = WORK / f'{name}-{label}.hex'
         interestc('build', program, *flags, '-o', out)
         return out.read_text().strip()
 
     creation, runtime = part('creation'), part('runtime', '--runtime')
-    deploy(f'{name}-deploy', creation, runtime, data_storage(program),
-           data_logs(program) if logs is None else logs)
+    storage = data_storage(program) | ({CARRIER: int(suffix, 16)} if suffix else {})
+    deploy(f'{name}-deploy', creation, runtime, storage, data_logs(program) if logs is None else logs,
+           suffix=suffix, token=token)
     return runtime
 
 
@@ -505,6 +519,90 @@ def impossibility_example_cases():
                              logs=[paid_log(1, 4096, 2, 0)])
 
 
+@functools.cache
+def token_code(variant):
+    return bytecode('token', variant)
+
+
+@functools.cache
+def allowance(owner, spender):
+    """The slot of allowance[OWNER][SPENDER] of the stub token (`evmtool token`): base slot 1."""
+    return int(checked(['cast', 'index', 'address', f'0x{spender:040x}', f'0x{slot(1, owner):064x}']).strip(), 16)
+
+
+def token_case(name, runtime, calldata, before, after, result, *, variant, held, moved=None, value=0,
+               sender=SENDER, logs=()):
+    """expect with the stub token `evmtool token VARIANT` at TOKEN: HELD is the token storage
+    before the call, MOVED the token storage after it (None: HELD)."""
+    actual = run(name, runtime, calldata, before=before, value=value, sender=sender,
+                 token=(TOKEN, token_code(variant), held))
+    wanted = dict(status='revert' if result is None else 'success',
+                  output='' if result is None else f'{result:064x}',
+                  storage={k: v for k, v in after.items() if v}, logs=list(logs),
+                  token={k: v for k, v in (held if moved is None else moved).items() if v})
+    got = {key: actual[key] for key in wanted}
+    require(got == wanted, f'{name}: EVM {got} != {wanted}')
+    return 1
+
+
+def token_cases():
+    """O5b carrier: examples/arrow-debreu-token.lang (the Debreu example in token mode, S = 10)
+    with the stub token at TOKEN. deposit pulls a by transferFrom and the strict balance delta
+    (MY CALLs 147, 148); withdraw pays by transfer after the stores, with no call at paid 0 (149);
+    a direct transfer does not change the reserves (152). -> (cases, deploys)."""
+    holder = (TOKEN, token_code('standard'), {})
+    word = f'{int(TOKEN, 16):064x}'
+    runtime = program_code('example-debreu-token', DEBREU_TOKEN, [(1, 5), (2, 5)], suffix=word, token=holder)
+    creation = (WORK / 'example-debreu-token-creation.hex').read_text().strip()
+    for label, suffix in (('missing', ''), ('no-code', f'{0xb2:064x}'),
+                          ('high-bits', f'{2**160 + int(TOKEN, 16):064x}')):
+        made = run(f'example-debreu-token-deploy-{label}', creation + suffix, '', create=True, token=holder)
+        require(made['status'] == 'revert' and made['output'] == '' and made['logs'] == [] and made['created'] == {},
+                f'example-debreu-token-deploy-{label}: the creation did not revert')
+    base = data_storage(DEBREU_TOKEN) | {CARRIER: int(TOKEN, 16)}
+    me, here, kept = int(SENDER, 16), int(RECEIVER, 16), int(TOKEN, 16)
+    rent, sale, mu1, num1, cp1 = slot(RESERVE, 0), slot(RESERVE, 1), slot(MU, 1), slot(NUM, 1), slot(CHECKPOINT, 1)
+    one = wallet(4096)
+    held = {slot(0, me): 10, allowance(me, here): 7}
+    moved = {slot(0, me): 6, slot(0, here): 4, allowance(me, here): 3}
+    hook = {**held, slot(0, kept): 4, allowance(kept, here): 4}
+    pull, funded = data('deposit', 0, 4), {**base, rent: 4}
+    accrued = {**base, INDEX: 3, num1: 4}
+    paid = {**base, INDEX: 3, cp1: 3, DUST: 9}
+    stock, sent = {slot(0, here): 5}, {slot(0, here): 4, slot(0, 4096): 1}
+    rows = [('deposit-token', pull, base, funded, 4, 'standard', held, moved, 0, SENDER, []),
+            ('deposit-token-no-approve', pull, base, None, None, 'standard', {slot(0, me): 10}, None, 0, SENDER, []),
+            ('deposit-token-value', pull, base, None, None, 'standard', held, None, 1, SENDER, []),
+            ('deposit-token-fee', pull, base, None, None, 'fee', held, None, 0, SENDER, []),
+            ('deposit-token-hook', pull, base, None, None, 'hook', hook, None, 0, SENDER, []),
+            ('deposit-token-noreturn', pull, base, funded, 4, 'noreturn', held, moved, 0, SENDER, []),
+            ('deposit-token-false', pull, base, None, None, 'false', held, None, 0, SENDER, []),
+            ('deposit-token-revert', pull, base, None, None, 'revert', held, None, 0, SENDER, []),
+            ('deposit-token-direct', pull, base, funded, 4, 'standard', {**held, slot(0, here): 50},
+             {**moved, slot(0, here): 54}, 0, SENDER, []),
+            ('withdraw-token', data('withdraw'), accrued, paid, 1, 'standard', stock, sent, 0, one,
+             [paid_log(1, 4096, 1, 9)]),
+            ('withdraw-token-revert', data('withdraw'), accrued, None, None, 'revert', stock, None, 0, one, []),
+            ('withdraw-token-false', data('withdraw'), accrued, None, None, 'false', stock, None, 0, one, []),
+            ('withdraw-token-noreturn', data('withdraw'), accrued, paid, 1, 'noreturn', stock, sent, 0, one,
+             [paid_log(1, 4096, 1, 9)]),
+            ('withdraw-token-zero', data('withdraw'), {**base, num1: 9}, None, 0, 'revert', stock, None, 0, one,
+             [paid_log(1, 4096, 0, 0)]),
+            ('withdraw-token-recycle', data('withdraw'), {**accrued, DUST: 5}, {**paid, rent: 1, DUST: 4}, 1,
+             'standard', stock, sent, 0, one, [paid_log(1, 4096, 1, 9)]),
+            ('withdraw-token-wrap', data('withdraw'), {**base, INDEX: 2**255}, None, None, 'standard', stock, None,
+             0, one, []),
+            ('distribute-token', data('distribute', 0), {**base, rent: 30, sale: 8},
+             {**base, rent: 0, sale: 8, INDEX: 30}, 30, 'standard', stock, None, 0, SENDER, []),
+            ('view-token-value', data('mass', 1), base, None, None, 'standard', stock, None, 1, SENDER, [])]
+    cases = sum(token_case(f'example-debreu-token-{label}', runtime, calldata, before,
+                           before if after is None else after, result, variant=variant, held=store,
+                           moved=after_store, value=value, sender=sender, logs=logs)
+                for label, calldata, before, after, result, variant, store, after_store, value, sender, logs in rows)
+    require(mu1 in base, 'token example: identity 1 holds no units')
+    return cases, 4
+
+
 def gas_check(write):
     """The gas of each EVM call (USED, run order) against BASELINE lines `name gas`:
     the same names in the same order, and no call above its line."""
@@ -556,8 +654,9 @@ def main(write_gas):
     deploy('debreu-n63-deploy', bytecode('creation', members, 'debreu', *codes),
            bytecode('runtime', members, 'debreu', *codes), {CHARTER: 1})
     cases += amend_pins() + debreu_example_cases() + impossibility_example_cases()
+    carried, deploys = token_cases()
     gas = gas_check(write_gas)
-    print(f'SETTLEMENT cases={cases} deploy=5 geth=expected OK (logs: {WORK})')
+    print(f'SETTLEMENT cases={cases + carried} deploy={5 + deploys} geth=expected OK (logs: {WORK})')
     print(gas)
 
 
