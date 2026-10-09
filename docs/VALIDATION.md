@@ -13,7 +13,8 @@ sources and the test tools with the C compiler as a second check
 embed-safety, check 52 cases, build output 27 checks, refusal
 49 cases, normal forms 10, the
 differential test (27 vectors at k = 3), domain tests 11, the differential
-test of the k = 4 domain (64 vectors), settlement 140 cases with 4 deploys,
+test of the k = 4 domain (64 vectors), settlement 140 cases with 4 deploys
+and a gas ceiling on their 141 EVM calls (`test/gas-baseline.txt`),
 and claims (20 sequences totaling 500 steps, 99 law calls, 70 contract checks).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
@@ -81,3 +82,13 @@ examples and for `test/domains/plural4.lang` (k = 4) did not change, byte
 for byte. Two mutants make the gate fail: `lang_domain_read` that gives
 NULL data (`test/check.sh` fails first), and a driver without the
 `ferror(stdout)` check (`test/build-output.sh` fails).
+
+The L7 slice added a gas check to `test/settlement.py`. Each EVM call runs
+with a gas limit of 16777216, and geth gives the gas that the call used.
+`test/gas-baseline.txt` has one `name gas` line for each of the 141 calls
+(133 cases and 8 deploy calls), in the run order. The gate is red if a call
+uses more gas than its line, or if the calls are not the calls of the file.
+A call that uses less gas prints a `GAS note` line, and the gate stays green.
+`python3 test/settlement.py --write-gas` writes the file again. The value is
+the execution gas: geth `evm run` does not charge the intrinsic gas of a
+transaction. The claims calls have no gas check.

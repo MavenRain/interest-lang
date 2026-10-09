@@ -319,10 +319,11 @@ Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
-cases. After O3, `make check` passes on the interest-lang domain and the
+cases. After L7, `make check` passes on the interest-lang domain and the
 three examples: parse 28, check 52, build output 27, refusal 49, normal
 forms 10,
-differential 27 and 64 vectors, domain tests 11, settlement 140 cases,
+differential 27 and 64 vectors, domain tests 11, settlement 140 cases
+(141 EVM calls under the gas ceiling of `test/gas-baseline.txt`),
 claims 20 sequences (500 steps), 99 law calls and 70 contract checks, 0
 failures (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
 applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of

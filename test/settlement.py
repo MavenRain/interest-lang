@@ -2,7 +2,9 @@
 """Run the bytecode of src/evm.c in geth evm against balances computed here.
 
 Needs tcc, geth evm 1.14.12 and foundry cast. Mapping slots come from
-`cast index` and selectors from `cast sig`, not from src/keccak.c."""
+`cast index` and selectors from `cast sig`, not from src/keccak.c. The gas
+that each EVM call uses must not be more than its line in test/gas-baseline.txt;
+`--write-gas` writes that file again."""
 import functools
 import json
 from pathlib import Path
@@ -24,6 +26,8 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
 MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM = range(8)
 INTERESTC = ROOT / 'build/interestc'
+BASELINE = ROOT / 'test/gas-baseline.txt'
+USED = {}
 DEBREU = ROOT / 'examples/arrow-debreu.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
 
@@ -101,6 +105,8 @@ def run(name, code, calldata, *, before=None, value=0, create=False, sender=SEND
     require(len(records) >= 2 and 'accounts' in records[-1], f'{name}: missing state dump')
     errors = [row['error'] for row in records if row.get('error')]
     require(all(error == 'execution reverted' for error in errors), f'{name}: EVM fault {errors}')
+    require(name not in USED, f'{name}: two EVM calls with this name')
+    USED[name] = int(records[-2]['gasUsed'], 16)
     stores = {key.lower().removeprefix('0x'): words(account.get('storage', {}))
               for key, account in records[-1]['accounts'].items()}
     return dict(status='revert' if errors else 'success',
@@ -379,7 +385,23 @@ def impossibility_example_cases():
                              {**accrued, slot(CHECKPOINT, 1): 2}, 2, balance=2, sender=one)
 
 
-def main():
+def gas_check(write):
+    """The gas of each EVM call (USED, run order) against BASELINE lines `name gas`:
+    the same names in the same order, and no call above its line."""
+    if write:
+        BASELINE.write_text(''.join(f'{name} {gas}\n' for name, gas in USED.items()))
+    pins = [(name, int(gas)) for name, gas in (line.split(' ') for line in BASELINE.read_text().splitlines())]
+    require([name for name, _ in pins] == list(USED),
+            f'gas: the EVM calls are not the calls of {BASELINE.name}; write it with --write-gas')
+    over = [f'{name} {USED[name]}>{gas}' for name, gas in pins if USED[name] > gas]
+    require(not over, f'gas: {len(over)} calls above the baseline: {" ".join(over)}')
+    for name, gas in pins:
+        if USED[name] < gas:
+            print(f'GAS note {name} {USED[name]} < {gas}')
+    return f'GAS calls={len(USED)} total={sum(USED.values())} max={max(USED.values())} ceiling=test/gas-baseline.txt'
+
+
+def main(write_gas):
     WORK.mkdir(parents=True, exist_ok=True)
     require(bytecode('keccak', '') ==
             'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470', 'keccak256("")')
@@ -408,12 +430,15 @@ def main():
         expect(f'amend-n{members}', code, data('amend', *vectors[0]), {}, {CHARTER: decision}, decision)
         cases += 1
     cases += debreu_example_cases() + impossibility_example_cases()
+    gas = gas_check(write_gas)
     print(f'SETTLEMENT cases={cases} deploy=4 geth=expected OK (logs: {WORK})')
+    print(gas)
 
 
 if __name__ == '__main__':
     try:
-        main()
+        require(sys.argv[1:] in ([], ['--write-gas']), 'usage: settlement.py [--write-gas]')
+        main(sys.argv[1:] == ['--write-gas'])
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(f'SETTLEMENT FAIL: {error}', file=sys.stderr)
         sys.exit(1)

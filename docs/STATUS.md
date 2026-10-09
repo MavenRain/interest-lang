@@ -60,8 +60,10 @@ milestone of SPEC section 10 is open.
 - `withdraw` keeps NUM mod S for the identity, so a part of a wei can stay
   in the contract. `distribute` and `withdraw` are open to all callers, and
   `withdraw` pays the calling wallet.
-- The gate runs each call with geth `evm run`, which charges no gas. Thus
-  the gate does not measure gas.
+- The gate measures only the execution gas of the settlement calls: geth
+  `evm run` does not charge the intrinsic gas of a transaction, and
+  `test/claims.py` has no gas check. Each settlement call must not use more
+  gas than its line in `test/gas-baseline.txt`.
 - The ERC-721 example gives the ownership model of ERC-721, not its ABI:
   SPEC section 2 refuses `balanceOf`, `approve` and `transferFrom`.
 
