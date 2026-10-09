@@ -56,7 +56,7 @@ milestone of SPEC section 10 is open.
 - `Nat` in the checker is a 64-bit word (`TYPE_NAT` on an overflow). The
   contract computes with 256-bit words and reverts on a wrap.
 - At most 32 genesis rows, 4 profiles and 2 payment kinds
-  (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS` in `src/evm.h`).
+  (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS` in `domain/data.h`).
 - `withdraw` keeps NUM mod S for the identity, so a part of a wei can stay
   in the contract. `distribute` and `withdraw` are open to all callers, and
   `withdraw` pays the calling wallet.

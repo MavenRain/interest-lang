@@ -236,11 +236,11 @@ scan for en and em dashes. It ends with `gate: 0 failures`.
 | Source size | 1 MiB | `src/syntax.h:36` |
 | Arena | 256 MiB | `src/syntax.h:37` |
 | Parser nesting | 512 | `src/syntax.h:35` |
-| Checker depth | 4096 | `src/check.c:16` |
-| Checker fuel, for each declaration, tally and ballot vector | 2^24 steps | `src/check.c:15` |
-| Members for `table` | 1000 | `src/check.c:18` |
-| Tallies for `table` | 501501 | `src/check.c:19` |
-| Ballot vectors for `verdicts` | 59049 (3^10) | `src/check.c:17` |
+| Checker depth | 4096 | `src/check.c:17` |
+| Checker fuel, for each declaration, tally and ballot vector | 2^24 steps | `src/check.c:16` |
+| Members for `table` | 1000 | `src/check.c:19` |
+| Tallies for `table` | 501501 | `src/check.c:20` |
+| Ballot vectors for `verdicts` | 59049 (3^10) | `src/check.c:18` |
 | Decision values k | 2 to 64 | `src/evm.h:7` |
 | Members for `build` (Arrow-Debreu) | largest n with C(n+k-1, k-1) * ceil(log2(k+1)) <= 256 (k = 3: 14) | `src/evm.c:374` |
 | Verdict table | n(n+1)^(k-2) + 1 bytes, at most 4096 | `src/evm.c:382` |
