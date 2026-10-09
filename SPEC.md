@@ -264,10 +264,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `S = 1` (a Dirac measure).
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events.
-- O6. The genesis charter: any declared charter (proposal) or the value of
-  `gov` at a genesis configuration.
-- O7. `attest` at impossibility. Proposal: allowed under the genesis
-  issuers, because the registry is not a claim.
+- O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
+  program gives the genesis charter, and it can be any declared charter.
+  `examples/arrow-debreu.lang` has `start restricted`, the second declared
+  charter. The settlement deploy `example-debreu-deploy` and the settlement
+  case `example-debreu-charter` pin this ruling.
+- O7. `attest` at impossibility. RULED 2026-10-08 (USER): `attest` is
+  allowed at impossibility under the genesis issuers, because the registry
+  is not a claim. The settlement cases `example-impossibility-attest-issuer`
+  and `example-impossibility-attest-non-issuer` pin this ruling.
 - O8. The compiler name. RULED 2026-10-08 (USER): `interestc`. The build
   writes `build/interestc`, and each diagnostic starts with `interestc: `.
   Slice I2a renamed the host kit name `langc` in the build, the
