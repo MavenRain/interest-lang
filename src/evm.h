@@ -5,27 +5,10 @@
 typedef enum { LANG_REGIME_IMPOSSIBILITY, LANG_REGIME_DEBREU } LangRegime;
 typedef enum { LANG_PART_CREATION, LANG_PART_RUNTIME } LangPart;
 enum { LANG_DECISIONS_MAX = 64 };  /* k, the constructors of the decision type */
-/* The program data of the contract (SPEC section 7, I3 plan MY CALLs 11-12):
- * the start charter, the genesis rows and the charter tables, read from the
- * optional program defs start, genesis, restrict, waterfall and issuers. */
-enum { LANG_GENESIS_MAX = 32, LANG_PROFILES = 4, LANG_KINDS = 2 };
-typedef enum { LANG_CAP_DENY, LANG_CAP_UP_TO, LANG_CAP_ANY } LangCapTag;
-typedef struct { LangCapTag tag; unsigned long long n; } LangCap;
-typedef struct {
-  unsigned long long wallet, identity, units;
-  unsigned profile;            /* 2 (juris - 1) + (status - 1), 0 .. 3 */
-} LangHolder;
-typedef struct { unsigned charter; unsigned long long identity; } LangIssuer;
-typedef struct {
-  unsigned start;              /* the active charter at genesis, 1 .. charters */
-  unsigned charters;           /* K, the constructors of Charter */
-  size_t holders;
-  LangHolder holder[LANG_GENESIS_MAX];
-  LangCap cap[LANG_DECISIONS_MAX][LANG_PROFILES][LANG_PROFILES];  /* R, charter code - 1 first */
-  unsigned char pass[LANG_DECISIONS_MAX][LANG_KINDS];            /* W: 1 pass, 0 retain */
-  size_t issuers;
-  LangIssuer issuer[LANG_DECISIONS_MAX * LANG_GENESIS_MAX];
-} LangDomainData;
+/* The program data of the domain. The domain defines the struct
+ * (domain/data.h) and reads it from the program (lang_domain_read,
+ * check.h). The core only passes the pointer. */
+typedef struct LangDomainData LangDomainData;
 typedef struct {
   unsigned members;            /* n >= 1 */
   LangRegime regime;

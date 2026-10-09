@@ -36,11 +36,13 @@ generated language). "host CAPABILITY.md" is `docs/CAPABILITY.md`
 | `interestc table PROG` | Prints the regime, the member count and the decision code of each tally, on one line. |
 | `interestc verdicts PROG NAME` | Prints one decision code for each ballot vector of the ChoiceRule `NAME`, compact digits for k <= 9 or space-separated decimal codes for k >= 10. |
 | `interestc eval PROG NAME` | Prints the normal form of `NAME`. |
+| `interestc data PROG` | Prints the program data that the domain reads (`lang_domain_print`, The domain): one line each for `start`, `charters`, `genesis`, `restrict`, `waterfall` and `issuers`. |
 | `interestc build PROG [--runtime] -o OUT` | Checks the program and writes the creation code (or the runtime code with `--runtime`) to `OUT` as lowercase hex, without `0x`, with a final newline. `--runtime` comes before `-o`. |
 
 A refused build preserves an existing `OUT` and does not create an absent
 `OUT`. An output path that names the source, including a hard link or
-symlink, is rejected with `IO_WRITE` and exit 2.
+symlink, is rejected with `IO_WRITE` and exit 2. A failed write to stdout
+gives `interestc: IO_WRITE: -: stdout: message` and exit 2.
 
 Exit 0 is success. Exit 1 is a refused program. Exit 2 is a usage or IO
 error. A refusal writes one line to stderr: `interestc: CODE: NAME: message`.
@@ -51,12 +53,14 @@ error. A refusal writes one line to stderr: `interestc: CODE: NAME: message`.
 |---|---|---|
 | `src/` | core | Lexer, parser, printer, checker (`check.c`), EVM core (`evm.c`), the assembler API for domains (`asm.h`), keccak, arena, diagnostics |
 | `domain/domain.lang` | domain | The prelude: the types and operations of the language. `gen/embed.c` embeds it in `build/interestc` at build time. |
-| `domain/entries.c` | domain | The storage layout and the contract entries of each regime |
+| `domain/entries.c` | domain | The storage layout, the contract entries of each regime and the program data hooks |
+| `domain/data.h` | domain | The program data struct `LangDomainData` and its reader `lang_data` (`src/check.c`) |
 | `examples/` | sample | The three sample programs: one for each regime, and an ERC-721 Dirac measure |
 | `test/` | gate | `test/gate.sh` and its tests |
 
 A new language edits `domain/domain.lang` and `domain/entries.c`. It does
-not edit `src/`.
+not edit `src/`, except for a program data reader that needs the checker
+internals (The domain).
 
 ## The domain
 
@@ -98,8 +102,7 @@ The core writes the dispatcher, then for each entry a head (callvalue
 guard unless payable, calldata size check), then calls `emit`. An unknown
 selector reverts. `emit` gets an `EntryContext`: `members` (n), `decisions`
 (k, or 0 in Arrow-impossibility), `packed` (the amend word, Arrow-Debreu
-only) and `data` (the program data: the start charter, the genesis rows,
-the R caps, the W gates and the issuer pairs; NULL gives the defaults). The core entries `lang_entry_cast` and `lang_entry_amend` can go in
+only) and `data` (the program data, below). The core entries `lang_entry_cast` and `lang_entry_amend` can go in
 a list. The `asm_*` helpers of `src/asm.h` write opcodes, pushes, labels
 (64 for each contract), jumps, calldata words, mapping slots
 (keccak(key . slot)), checked addition, memory words, an address guard and
@@ -115,11 +118,29 @@ k = 10. `test/settlement.py`, the entry sequences of `test/differential.py`
 and `test/claims.py` (the reference model of the interest operations) model
 the interest domain. A new domain replaces them.
 
-The domain also gives two hooks. `lang_domain_genesis(a, contract)` writes
-the genesis storage in the creation code, before the runtime copy.
-`lang_domain_data(a, c)` writes the code data of the runtime at
-`LABEL_DATA`, after the entries and the verdict table, so that no data byte
-comes before code.
+The program data of a domain is data that the program gives and the
+contract keeps. For this domain it is the start charter, the genesis rows,
+the R caps, the W gates and the issuer pairs (SPEC section 7). The core
+does not know its form. `src/evm.h` declares `LangDomainData`, and
+`domain/data.h` defines the struct. The core passes only a pointer
+(`LangContract.data` and `EntryContext.data`; NULL gives the defaults).
+`domain/entries.c` gives four hooks:
+
+- `lang_domain_read(checked, &data)` (`src/check.h`) reads the data from
+  the checked program. `interestc data` and `interestc build` call it after
+  the check. It calls `lang_data` (`src/check.c`), which reads the program
+  defs `start`, `genesis`, `restrict`, `waterfall` and `issuers`, and gives
+  the defaults for each absent def.
+- `lang_domain_print(data, out)` (`src/check.h`) writes the data for
+  `interestc data`.
+- `lang_domain_genesis(a, contract)` (`src/asm.h`) writes the genesis
+  storage in the creation code, before the runtime copy.
+- `lang_domain_data(a, c)` (`src/asm.h`) writes the code data of the
+  runtime at `LABEL_DATA`, after the entries and the verdict table, so that
+  no data byte comes before code.
+
+`lang_data` must evaluate program definitions, so it is in `src/check.c`
+and not in `domain/`.
 
 ## The interest domain
 
@@ -197,7 +218,8 @@ each checker error.
 `make check` builds `build/interestc`, `build/parsetool` and the test domain
 compilers, runs `make check-clang`, then `test/gate.sh`. The gate runs, in
 order: `test/parse.sh`, `test/embed-safety.sh`, `test/check.sh`,
-`test/build-output.sh` (refused builds and source aliases), `test/refusal.sh`,
+`test/build-output.sh` (refused builds, source aliases and failed stdout
+writes), `test/refusal.sh`,
 `test/normal-forms.py`, `test/differential.py` (k = 3, geth against
 `interestc table` and `interestc verdicts`), `test/domains.sh`,
 `test/differential.py --interestc build/k4/interestc --decisions 4 --program

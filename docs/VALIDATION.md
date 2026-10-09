@@ -10,7 +10,7 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `build/parsetool` and the three test-domain compilers with tcc, compiles the
 sources and the test tools with the C compiler as a second check
 (`check-clang`), and runs `test/gate.sh`. The gate runs these steps: parse 28 round trips,
-embed-safety, check 52 cases, build output preservation 20 checks, refusal
+embed-safety, check 52 cases, build output 27 checks, refusal
 49 cases, normal forms 10, the
 differential test (27 vectors at k = 3), domain tests 11, the differential
 test of the k = 4 domain (64 vectors), settlement 125 cases with 4 deploys,
@@ -68,3 +68,16 @@ checks creation and runtime output: compiler refusals preserve artifacts,
 source aliases are rejected, and successful builds replace the output.
 Each regression reproduced its defect before the fix. The full gate
 passes with all four fixes.
+
+The I6 slice removed the two differences from the kit that
+`docs/KIT-DEBT.md` records. The program data uses the kit hooks:
+`src/evm.h` declares `LangDomainData`, `domain/data.h` defines it, and
+`lang_domain_read` and `lang_domain_print` (`domain/entries.c`) read and
+write it. `src/main.c` is the kit driver, so a failed write to stdout gives
+`IO_WRITE` with exit 2. `test/build-output.sh` has the 7 stdout checks of
+the kit and now has 27 checks; the other counts did not change. The
+outputs of `data`, `table`, `build` and `build --runtime` for the three
+examples and for `test/domains/plural4.lang` (k = 4) did not change, byte
+for byte. Two mutants make the gate fail: `lang_domain_read` that gives
+NULL data (`test/check.sh` fails first), and a driver without the
+`ferror(stdout)` check (`test/build-output.sh` fails).

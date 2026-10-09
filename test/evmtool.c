@@ -1,7 +1,7 @@
 /* Test driver of the EVM back end, run with:
- *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c -run test/evmtool.c creation|runtime N debreu CODE...
- *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c -run test/evmtool.c creation|runtime N impossibility [CODE...]
- *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c -run test/evmtool.c keccak TEXT
+ *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c src/check.c src/arena.c src/diag.c src/printer.c -run test/evmtool.c creation|runtime N debreu CODE...
+ *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c src/check.c src/arena.c src/diag.c src/printer.c -run test/evmtool.c creation|runtime N impossibility [CODE...]
+ *   tcc -Isrc src/evm.c src/keccak.c domain/entries.c src/check.c src/arena.c src/diag.c src/printer.c -run test/evmtool.c keccak TEXT
  * Codes go to lang_evm_write unchecked (0 to 255), so the tests reach its
  * EVM_TABLE refusals. Exit 0 ok, 1 refused by the back end, 2 usage. */
 #include "../src/evm.h"

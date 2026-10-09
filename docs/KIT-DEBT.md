@@ -69,6 +69,14 @@ that alias the source file, including hard links and symlinks
 
 ## Differences that remain
 
+Status 2026-10-08: removed in slice I6. The program data uses the kit
+hooks `lang_domain_read` and `lang_domain_print` (`domain/entries.c`).
+`src/evm.h` declares `LangDomainData` as an incomplete type, and
+`domain/data.h` defines it. `src/main.c` is the kit driver, so a failed
+write to stdout gives `IO_WRITE` with exit 2, and `test/build-output.sh`
+has the 7 stdout checks of the kit. The text below stays as the record of
+slice K3.
+
 lang-template `fa1131a` and this tree still differ in two points. Slice K3
 records them and does not change the code. A later interest-lang slice can
 remove them.

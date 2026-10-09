@@ -14,8 +14,12 @@
  *
  * Code data at LABEL_DATA: the R limit words, rows x 4 x 4 (charter code - 1,
  * profile of the sender, profile of the receiver; "admits q" = q < L), then
- * the W gate words, rows x 2 (pass 1, retain 0), 32 bytes each. */
+ * the W gate words, rows x 2 (pass 1, retain 0), 32 bytes each.
+ *
+ * Program data (data.h): lang_domain_read gives the data that lang_data
+ * (src/check.c) reads, and lang_domain_print writes it for the `data` verb. */
 #include "asm.h"
+#include "data.h"
 #include <string.h>
 
 enum {
@@ -540,4 +544,48 @@ void lang_domain_data(Asm *a, const EntryContext *c) {
       word_of(word, c->data != NULL && c->data->pass[r][k] ? 1u : 0u, 0);
       put_word(a, word);
     }
+}
+
+/* The program data of the program (lang_data). This domain always gives
+ * the data, never NULL. */
+int lang_domain_read(LangChecked *checked, const LangDomainData **data) {
+  static LangDomainData program;
+  int status = lang_data(checked, &program);
+  if (status != LANG_EXIT_OK)
+    return status;
+  *data = &program;
+  return LANG_EXIT_OK;
+}
+
+static const char *cap_text(LangCap cap, char *buf, size_t size) {
+  switch (cap.tag) {
+  case LANG_CAP_DENY: return "d";
+  case LANG_CAP_ANY: return "a";
+  case LANG_CAP_UP_TO: snprintf(buf, size, "u%llu", cap.n); return buf;
+  }
+  return "?";
+}
+
+/* The `data` verb: start, charters, genesis rows w:h:p:u, restrict (one
+ * group of 16 caps per charter, profile pairs row-major), waterfall (one
+ * group per charter: p pass, r retain, for rent then sale), issuers c:h.
+ * DATA is not NULL (lang_domain_read). */
+void lang_domain_print(const LangDomainData *data, FILE *out) {
+  fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
+  for (size_t i = 0; i < data->holders; i++)
+    fprintf(out, " %llu:%llu:%u:%llu", data->holder[i].wallet, data->holder[i].identity,
+            data->holder[i].profile, data->holder[i].units);
+  fputs("\nrestrict", out);
+  char buf[32];
+  for (unsigned i = 0; i < data->charters; i++)
+    for (unsigned p = 0; p < LANG_PROFILES; p++)
+      for (unsigned r = 0; r < LANG_PROFILES; r++)
+        fprintf(out, "%s%s", p == 0 && r == 0 ? " " : ",", cap_text(data->cap[i][p][r], buf, sizeof buf));
+  fputs("\nwaterfall", out);
+  for (unsigned i = 0; i < data->charters; i++)
+    fprintf(out, " %c%c", data->pass[i][0] ? 'p' : 'r', data->pass[i][1] ? 'p' : 'r');
+  fputs("\nissuers", out);
+  for (size_t i = 0; i < data->issuers; i++)
+    fprintf(out, " %u:%llu", data->issuer[i].charter, data->issuer[i].identity);
+  fputc('\n', out);
 }

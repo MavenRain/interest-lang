@@ -7,6 +7,7 @@
  * natDiv, natMod, natEq and natLt reduce on literals. After the first error every function returns
  * at once. */
 #include "check.h"
+#include "../domain/data.h"
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>

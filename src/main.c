@@ -3,7 +3,7 @@
  *   interestc table PROG                    REGIME MEMBERS [CODES...]
  *   interestc verdicts PROG NAME            one decision code per ballot vector
  *   interestc eval PROG NAME                the normal form of NAME
- *   interestc data PROG                     the program data, one line per table
+ *   interestc data PROG                     the program data of the domain (lang_domain_print)
  *   interestc build PROG [--runtime] -o OUT the contract
  * Exit 0 ok, 1 refused, 2 usage or IO; errors go to stderr as
  * "interestc: CODE: DEF: message". Each verb parses the embedded prelude and
@@ -69,40 +69,13 @@ static int verb_table(LangChecked *checked) {
   return LANG_EXIT_OK;
 }
 
-static const char *cap_text(LangCap cap, char *buf, size_t size) {
-  switch (cap.tag) {
-  case LANG_CAP_DENY: return "d";
-  case LANG_CAP_ANY: return "a";
-  case LANG_CAP_UP_TO: snprintf(buf, size, "u%llu", cap.n); return buf;
-  }
-  return "?";
-}
-
-/* data PROG: start, charters, genesis rows w:h:p:u, restrict (one group of
- * 16 caps per charter, profile pairs row-major), waterfall (one group per
- * charter: p pass, r retain, for rent then sale), issuers c:h. */
+/* data PROG: only what the domain hooks give (domain/entries.c). */
 static int verb_data(LangChecked *checked) {
-  static LangDomainData data;
-  int status = lang_data(checked, &data);
+  const LangDomainData *data = NULL;
+  int status = lang_domain_read(checked, &data);
   if (status != LANG_EXIT_OK)
     return status;
-  printf("start %u\ncharters %u\ngenesis", data.start, data.charters);
-  for (size_t i = 0; i < data.holders; i++)
-    printf(" %llu:%llu:%u:%llu", data.holder[i].wallet, data.holder[i].identity, data.holder[i].profile,
-           data.holder[i].units);
-  printf("\nrestrict");
-  char buf[32];
-  for (unsigned i = 0; i < data.charters; i++)
-    for (unsigned p = 0; p < LANG_PROFILES; p++)
-      for (unsigned r = 0; r < LANG_PROFILES; r++)
-        printf("%s%s", p == 0 && r == 0 ? " " : ",", cap_text(data.cap[i][p][r], buf, sizeof buf));
-  printf("\nwaterfall");
-  for (unsigned i = 0; i < data.charters; i++)
-    printf(" %c%c", data.pass[i][0] ? 'p' : 'r', data.pass[i][1] ? 'p' : 'r');
-  printf("\nissuers");
-  for (size_t i = 0; i < data.issuers; i++)
-    printf(" %u:%llu", data.issuer[i].charter, data.issuer[i].identity);
-  putchar('\n');
+  lang_domain_print(data, stdout);
   return LANG_EXIT_OK;
 }
 
@@ -121,11 +94,10 @@ static int verb_build(LangChecked *checked, Diag *diag, int argc, char **argv) {
   contract.members = lang_members(checked);
   contract.regime = lang_regime(checked);
   contract.decisions = lang_decisions(checked);
-  static LangDomainData data;
-  status = lang_data(checked, &data);
+  contract.data = NULL;
+  status = lang_domain_read(checked, &contract.data);
   if (status != LANG_EXIT_OK)
     return status;
-  contract.data = &data;
   const char *path = argv[argc - 1];
   if (same_file(argv[2], path)) {
     diag_set(diag, "IO_WRITE", span_of("-"), "%s: source and output are the same file", path);
@@ -215,7 +187,11 @@ int main(int argc, char **argv) {
   arena_init(&arena, LANG_ARENA_MAX);
   diag_init(&diag);
   int status = run(&arena, verb, &diag, argc, argv);
-  fflush(stdout);
+  int flushed = fflush(stdout);
+  if ((flushed != 0 || ferror(stdout)) && status == LANG_EXIT_OK) {
+    diag_set(&diag, "IO_WRITE", span_of("-"), "stdout: %s", strerror(errno));
+    status = LANG_EXIT_USAGE;
+  }
   diag_print(&diag, stderr);
   arena_free(&arena);
   return status;

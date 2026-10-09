@@ -34,7 +34,7 @@ def require(ok, message):
 
 
 def tool(*args):
-    argv = ['tcc', '-Isrc', 'src/evm.c', 'src/keccak.c', 'domain/entries.c', '-run', 'test/evmtool.c', *map(str, args)]
+    argv = ['tcc', '-Isrc', 'src/evm.c', 'src/keccak.c', 'domain/entries.c', 'src/check.c', 'src/arena.c', 'src/diag.c', 'src/printer.c', '-run', 'test/evmtool.c', *map(str, args)]
     return subprocess.run(argv, cwd=ROOT, text=True, capture_output=True, timeout=60)
 
 

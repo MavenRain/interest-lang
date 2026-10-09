@@ -1,5 +1,5 @@
 #!/bin/sh
-# Failed builds and output aliases must preserve source and existing artifacts.
+# Failed builds preserve files, and failed stdout writes must report an IO error.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 interestc=$root/build/interestc
@@ -68,5 +68,69 @@ for alias in hardlink symlink; do
   status "$alias source as output" 2 "$interestc" build "$out/source.lang" --runtime -o "$out/alias.lang"
   same "$alias source preserved" "$out/good.lang" "$out/source.lang"
 done
+
+# Exercise the data hook with an unbuffered stdout too. Then fflush gives 0,
+# and only ferror(stdout) shows the failed write. build/interestc cannot make
+# stdout unbuffered, so the fixture wraps the formatter of the domain. The
+# unbuffered case writes one line with fputs, as the kit fixture does: after
+# a failed fputc, the stdio of macOS keeps the byte, and fflush fails again.
+cat > "$out/data-domain.c" <<'EOF'
+#define lang_domain_print domain_print
+#include "domain/entries.c"
+#undef lang_domain_print
+#include <stdlib.h>
+void lang_domain_print(const LangDomainData *data, FILE *out) {
+  if (getenv("LANG_TEST_OUTPUT_UNBUFFERED") == NULL) {
+    domain_print(data, out);
+    return;
+  }
+  setvbuf(out, NULL, _IONBF, 0);
+  fputs("domain data\n", out);
+}
+EOF
+set --
+for source in main arena diag lexer parser printer check evm keccak; do
+  set -- "$@" "$root/src/$source.c"
+done
+if ! "${TCC:-tcc}" -std=c99 -Wall -Werror -I"$root/src" -I"$root" \
+  -o "$out/data-interestc" "$@" "$out/data-domain.c" "$root/build/domain.c"; then
+  exit 1
+fi
+python3 - "$root" "$out" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root, out = map(Path, sys.argv[1:])
+fixture, interestc = out / 'data-interestc', root / 'build/interestc'
+good = str(out / 'good.lang')
+data = subprocess.run([str(interestc), 'data', good], capture_output=True, text=True)
+assert (data.returncode, data.stderr) == (0, '') and data.stdout.startswith('start ')
+normal = subprocess.run([str(fixture), 'data', good], capture_output=True, text=True)
+assert (normal.returncode, normal.stdout, normal.stderr) == (0, data.stdout, '')
+readonly = out / 'readonly.txt'
+readonly.write_bytes(b'sentinel\n')
+cases = [(fixture, ['data', good], False), (fixture, ['data', good], True),
+         (interestc, ['check', good], False), (interestc, ['table', good], False),
+         (interestc, ['eval', good, 'members'], False),
+         (interestc, ['verdicts', str(root / 'examples/arrow-debreu.lang'), 'F'], False)]
+for compiler, args, unbuffered in cases:
+    env = {key: value for key, value in os.environ.items() if key != 'LANG_TEST_OUTPUT_UNBUFFERED'}
+    if unbuffered:
+        env['LANG_TEST_OUTPUT_UNBUFFERED'] = '1'
+    with readonly.open('rb') as stdout:
+        result = subprocess.run([str(compiler), *args], stdout=stdout, stderr=subprocess.PIPE,
+                                text=True, env=env)
+    assert result.returncode == 2 and result.stderr.startswith('interestc: IO_WRITE: -: stdout:'), (
+        args, unbuffered, result.returncode, result.stderr)
+assert readonly.read_bytes() == b'sentinel\n'
+PY
+actual=$?
+checks=$((checks + 7))
+if [ "$actual" -ne 0 ]; then
+  printf 'FAIL stdout write errors\n'
+  failures=$((failures + 1))
+fi
 printf 'build-output.sh: %s checks, %s failures\n' "$checks" "$failures"
 [ "$failures" -eq 0 ]

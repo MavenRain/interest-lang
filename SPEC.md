@@ -242,8 +242,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 - **Target.** EVM bytecode, creation and runtime. The compiler writes it
   directly. There is no Solidity and no external assembler.
 - **Gate.** `make check` builds `build/interestc`, runs `make check-clang`, then
-  `test/gate.sh`: parse, embed safety, check, build output preservation,
-  refusal, normal forms, the
+  `test/gate.sh`: parse, embed safety, check, build output (preservation
+  and stdout errors), refusal, normal forms, the
   differential test against geth, the k-generic domain tests, the
   settlement test, the claims test (the reference model `test/claims.py`
   against geth) and the em-dash scan. The gate needs geth `evm`
@@ -302,11 +302,14 @@ Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
-cases. After I5, `make check` passes on the interest-lang domain and the
-three examples: parse 28, check 52, build output preservation 20, refusal
-49, normal forms 10,
+cases. After I6, `make check` passes on the interest-lang domain and the
+three examples: parse 28, check 52, build output 27, refusal 49, normal
+forms 10,
 differential 27 and 64 vectors, domain tests 11, settlement 125 cases,
 claims 20 sequences (500 steps), 88 law calls and 70 contract checks, 0
 failures (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
 applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
-this tree. The open work is in `docs/STATUS.md`.
+this tree. I6 removed the two differences from the kit that
+`docs/KIT-DEBT.md` records: the program data uses the kit hooks
+`lang_domain_read` and `lang_domain_print`, and a failed write to stdout
+gives `IO_WRITE`. The open work is in `docs/STATUS.md`.

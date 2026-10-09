@@ -6,7 +6,7 @@ CLANG_FLAGS = -std=c99 -Wall -Wextra -Wswitch-enum -Werror -fsyntax-only -Isrc
 FRONT = src/arena.c src/diag.c src/lexer.c src/parser.c src/printer.c
 SRC = src/main.c $(FRONT) src/check.c src/evm.c src/keccak.c domain/entries.c
 TOOL = test/parsetool.c $(FRONT)
-HEADERS = $(wildcard src/*.h)
+HEADERS = $(wildcard src/*.h domain/*.h)
 
 .PHONY: build check check-clang clean
 

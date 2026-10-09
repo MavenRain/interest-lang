@@ -38,10 +38,10 @@ milestone of SPEC section 10 is open.
 1. Done: apply `docs/KIT-DEBT.md` to lang-template. Applied in
    lang-template `fa1131a` (slice K2).
 2. Done: the first commit of this tree (`a2ce1b8`).
-3. Remove the two differences from the kit (`docs/KIT-DEBT.md`,
-   "Differences that remain"): move the program data onto the kit hooks
-   `lang_domain_read` and `lang_domain_print`, and report a failed stdout
-   write as `IO_WRITE`. It needs an interest-lang slice with its own gate.
+3. Done: remove the two differences from the kit (`docs/KIT-DEBT.md`,
+   "Differences that remain"). The program data uses the kit hooks
+   `lang_domain_read` and `lang_domain_print`, and a failed stdout write
+   gives `IO_WRITE` (slice I6).
 
 ## Known limits
 
@@ -82,8 +82,9 @@ The EVM writer core (`src/evm.c`, `src/asm.h`, `src/keccak.c`) writes the
 dispatcher, the verdict table and `cast`. `test/differential.py` checks
 `cast` and `amend` against `interestc verdicts` in geth.
 
-The domain (`domain/domain.lang`, `domain/entries.c`) gives the prelude,
-the entries and the two hooks `lang_domain_genesis` and
+The domain (`domain/domain.lang`, `domain/data.h`, `domain/entries.c`)
+gives the prelude, the entries, the program data type and the four hooks
+`lang_domain_read`, `lang_domain_print`, `lang_domain_genesis` and
 `lang_domain_data`. `test/settlement.py` checks each entry in geth, and
 `test/claims.py` checks operation sequences against the reference model.
 A program cannot use `mu` families, `def rec`, `nu`, `axiom` or the
