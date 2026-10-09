@@ -13,8 +13,10 @@ neither mu nor the treasury, recover moves mu but no claim and not the treasury,
 impossibility reverts leave the state unchanged, R
 rejections revert, the dust of two withdraws goes to the rent reserve) and the contract
 half of the refusal list (no mint, burn, balanceOf, allowance, charter-write or
-issuer-write selector; a withdraw that pays moves num mod S to the dust). Uses the
-harness of settlement.py."""
+issuer-write selector; a withdraw that pays moves num mod S to the dust). One more run
+uses the Debreu tables in token mode (O5b): the model keeps the carrier balance and the
+allowance of each sender, and the solvency law holds in carrier units after each call.
+Uses the harness of settlement.py."""
 import dataclasses
 import functools
 import itertools
@@ -24,7 +26,7 @@ import subprocess
 import sys
 
 import settlement as st
-from settlement import (CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY, RESERVE,
+from settlement import (CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY, RESERVE,
                         SENDER, data, require, run, slot, vector_index, wallet)
 
 WORD = 2**256
@@ -34,6 +36,13 @@ WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=
 FACADE = ('balanceOf', 'totalSupply')
 VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting') + FACADE
 IDENTITIES = range(5)
+HERE = int(st.RECEIVER, 16)
+# The token run (MY CALL 159): the carrier balance and the allowance to the contract of each
+# sender at genesis. 4099 approves 60 units only and SENDER approves none, so their deposits
+# revert when the allowance is used up. Each balance is at least its allowance, and a deposit
+# takes the same amount from both, so the allowance always runs out first.
+FUNDS = ((4096, 10**6, 10**6), (4097, 10**6, 10**6), (4098, 10**6, 10**6), (4099, 10**6, 60),
+         (4100, 10**6, 10**6), (int(SENDER, 16), 1000, 0))
 # Signatures that the contract must not have (SPEC section 2 refusals, I2c MY CALL 8).
 FORBIDDEN = ('mint(address,uint256)', 'mint(uint256,uint256)', 'mint(uint256)', 'burn(uint256)',
              'burn(address,uint256)', 'balanceOf(uint256)',
@@ -59,6 +68,7 @@ class Program:
     entries: tuple
     constituting: int
     verdicts: str = ''
+    token: bool = False
 
     @property
     def supply(self):
@@ -71,7 +81,8 @@ class Program:
             'genesis ' + ' '.join(':'.join(map(str, row)) for row in self.genesis),
             'restrict ' + ' '.join(','.join(row) for row in self.restrict),
             'waterfall ' + ' '.join(self.waterfall),
-            'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers)]) + '\n'
+            'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers)]
+                         + (['asset token'] if self.token else [])) + '\n'
 
 
 # examples/arrow-debreu.lang: restrict open any, restricted upTo 4, frozen deny.
@@ -91,10 +102,15 @@ IMPOSSIBILITY = Program(
 ERC721 = Program(
     'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1), (4097, 2, 3, 0), (4098, 3, 0, 0)),
     (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1)
+# examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b).
+DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True)
 
 
 @dataclasses.dataclass(frozen=True)
 class State:
+    """BALANCE is the asset balance of the contract: wei, or carrier units in token mode.
+    In token mode CARRIER is the carrier address and TOKEN the carrier storage words of
+    the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None."""
     mu: dict
     registry: dict
     profile: dict
@@ -105,6 +121,8 @@ class State:
     num: dict
     balance: int
     dust: int = 0
+    carrier: int = 0
+    token: dict = None
 
 
 def genesis(program):
@@ -113,12 +131,15 @@ def genesis(program):
         registry[w] = h + 1
         mu[h] = mu.get(h, 0) + u
         profile[h] = p
-    return State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0)
+    s = State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0)
+    held = {key: value for w, balance, allowed in FUNDS
+            for key, value in ((slot(0, w), balance), (st.allowance(w, HERE), allowed))}
+    return dataclasses.replace(s, carrier=int(st.TOKEN, 16), token=held) if program.token else s
 
 
 def storage(s):
     """The storage words of state S (zero words left out)."""
-    words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust,
+    words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust, CARRIER: s.carrier,
              **{slot(MU, h): u for h, u in s.mu.items()},
              **{slot(REGISTRY, w): v for w, v in s.registry.items()},
              **{slot(PROFILE, h): p for h, p in s.profile.items()},
@@ -162,6 +183,18 @@ def deposit(program, s, sender, value, kind):
     total = s.reserve[kind] + value if kind < 2 else WORD
     return None if total >= WORD else (
         dataclasses.replace(s, reserve=put(s.reserve, kind, total), balance=s.balance + value), total)
+
+
+def pull(program, s, sender, value, kind, a):
+    """deposit(kind, a) in token mode (O5b): transferFrom(sender, this, a) needs a balance
+    and an allowance of a or more; the reserve then grows by a as in deposit."""
+    w = int(sender, 16)
+    paid, allowed = slot(0, w), st.allowance(w, HERE)
+    out = deposit(program, s, sender, a, kind)
+    if out is None or a > s.token.get(paid, 0) or a > s.token.get(allowed, 0):
+        return None
+    return dataclasses.replace(out[0], token={**s.token, paid: s.token[paid] - a,
+                                              allowed: s.token[allowed] - a}), out[1]
 
 
 def distribute(program, s, sender, value, kind):
@@ -258,32 +291,44 @@ OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=t
 def apply(program, s, call):
     """-> (state, result), or None when the call reverts (the state does not change)."""
     name, args, sender, value = call
-    if name not in program.entries or (value and name != 'deposit'):
+    if name not in program.entries or (value and (program.token or name != 'deposit')):
         return None
-    return OPS[name](program, s, sender, value, *args)
+    out = (pull if program.token and name == 'deposit' else OPS[name])(program, s, sender, value, *args)
+    if out is None or not (program.token and name == 'withdraw'):
+        return out
+    w = slot(0, int(sender, 16))
+    return dataclasses.replace(out[0], token={**out[0].token, w: out[0].token.get(w, 0) + out[1]}), out[1]
 
 
-def geth_step(label, runtime, before, balance, call):
+def geth_step(label, runtime, chain, call):
+    """CHAIN: (storage, balance) of the contract, and in token mode the carrier storage."""
     name, args, sender, value = call
+    before, balance, *held = chain
+    carrier = (st.TOKEN, st.token_code('standard'), held[0]) if held else None
     return run(label, runtime, data(name, *args), before=before, value=value, sender=sender,
-               balance=balance)
+               balance=0 if held else balance, token=carrier)
 
 
 def check_step(label, program, runtime, s, chain, call):
-    """One call: the model from S, geth from CHAIN = (storage, balance) of the step before.
+    """One call: the model from S, geth from CHAIN = (storage, balance) of the step before
+    (token mode: and the carrier storage; the wei balances stay 0 and BASE).
     -> (model state, geth chain) after the call."""
     model = apply(program, s, call)
     after, result = model if model else (s, None)
-    actual = geth_step(label, runtime, *chain, call)
+    actual = geth_step(label, runtime, chain, call)
+    wei = after.token is None
     wanted = dict(status='revert' if model is None else 'success',
                   output='' if model is None else f'{result:064x}',
-                  storage=storage(after), receiver=after.balance,
-                  sender=BASE + s.balance - after.balance, logs=records(program, s, call, model))
+                  storage=storage(after), receiver=after.balance if wei else 0,
+                  sender=BASE + s.balance - after.balance if wei else BASE,
+                  logs=records(program, s, call, model), token=holdings(after))
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
                receiver=actual['balances'].get(st.RECEIVER, 0),
-               sender=actual['balances'].get(call[2], 0), logs=actual['logs'])
+               sender=actual['balances'].get(call[2], 0), logs=actual['logs'], token=actual['token'])
     require(got == wanted, f'{label} {call}: geth {got} != model {wanted}')
-    return after, (actual['storage'], got['receiver'])
+    held = actual['token']
+    return after, ((actual['storage'], got['receiver']) if wei
+                   else (actual['storage'], held.get(slot(0, HERE), 0), held))
 
 
 def records(program, s, call, model):
@@ -340,11 +385,16 @@ COVER_DEBREU = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw
                 'attest+', 'amend+', 'cast+', 'claimOf+'}
 COVER_IMPOSSIBILITY = {'deposit+', 'withdraw0'}
 COVER_ERC721 = {'deposit+', 'distribute+', 'withdraw+', 'transfer+', 'amend+', 'cast+', 'claimOf+'}
+# The token run (MY CALL 159): deposit(kind, a) takes a of 0 .. 40 carrier units, and each
+# call sends 1 wei with chance 1/20 (every entry is non-payable in token mode, so it reverts).
+TOKEN_ARGS = dict(ARGS, deposit=lambda r: (r.choice((0, 0, 1, 1, 2)), r.randrange(0, 41)))
+TOKEN_SEEDS, TOKEN_LENGTH = range(1, 11), 20
+COVER_TOKEN = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw0', 'transfer+', 'claimOf+'}
 
 
-def random_call(rng, args):
+def random_call(rng, args, payable=True):
     name = rng.choice(CHOICES)
-    value = rng.randrange(0, 41) if name == 'deposit' else int(rng.randrange(20) == 0)
+    value = rng.randrange(0, 41) if name == 'deposit' and payable else int(rng.randrange(20) == 0)
     return name, args[name](rng), rng.choice(SENDERS), value
 
 
@@ -354,12 +404,12 @@ def sequence(program, runtime, seed, length, args):
     call the fold of the Transfer records since the deploy is mu; at the end balanceOf(h) = mass h."""
     rng, s, seen = random.Random(seed), genesis(program), set()
     measure = fold({}, [st.transfer_log(0, h, u) for h, u in st.data_logs(program.path)], minted=True)
-    chain, deposits, paid, recycled = (storage(s), 0), 0, 0, 0
+    chain, deposits, paid, recycled = at(s), 0, 0, 0
     for number in range(length):
-        label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args)
+        label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args, not program.token)
         model = apply(program, s, call)
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
-        deposits += call[3] if model and call[0] == 'deposit' else 0
+        deposits += (call[1][1] if program.token else call[3]) if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
         recycled += model[0].reserve[0] - s.reserve[0] if model and call[0] == 'withdraw' else 0
         charter, logs = chain[0].get(CHARTER), records(program, s, call, model)
@@ -367,7 +417,7 @@ def sequence(program, runtime, seed, length, args):
         measure = fold(measure, logs)
         require({h: u for h, u in measure.items() if u} == {h: u for h, u in s.mu.items() if u},
                 f'{label}: the fold of the Transfer records {measure} != mu {s.mu}')
-        require(laws_hold(program, *chain, deposits, paid, recycled),
+        require(laws_hold(program, *chain[:2], deposits, paid, recycled),
                 f'{label} {call}: conservation, sum to inflow or solvency fails on the geth state')
         require(chain[0].get(CHARTER) == charter or call[0] == 'amend', f'{label}: {call[0]} wrote the charter')
         require(program.supply != 1 or [v for v in s.mu.values() if v] == [1], f'{label}: the measure is not a Dirac measure')
@@ -408,9 +458,15 @@ def play(program, s, calls):
     return s
 
 
+def holdings(s):
+    """The carrier storage words of model state S (zero words left out); {} in wei mode."""
+    held = {} if s.token is None else {**s.token, slot(0, HERE): s.balance}
+    return {key: value for key, value in held.items() if value}
+
+
 def at(s):
-    """The geth chain (storage, balance) of model state S."""
-    return storage(s), s.balance
+    """The geth chain (storage, balance) of model state S, and the carrier storage in token mode."""
+    return (storage(s), s.balance) + (() if s.token is None else (holdings(s),))
 
 
 def rich_debreu(program):
@@ -621,8 +677,11 @@ def load(program):
     text = st.interestc('data', program.path)
     require(text == program.data_text(),
             f'{program.name}: interestc data {text!r} != claims.py tables {program.data_text()!r}')
-    runtime = st.program_code('claims-' + program.name, program.path)
-    require(storage(genesis(program)) == st.data_storage(program.path),
+    word = f'{int(st.TOKEN, 16):064x}' if program.token else ''
+    holder = (st.TOKEN, st.token_code('standard'), {}) if program.token else None
+    runtime = st.program_code('claims-' + program.name, program.path, suffix=word, token=holder)
+    carrier = {CARRIER: int(st.TOKEN, 16)} if program.token else {}
+    require(storage(genesis(program)) == st.data_storage(program.path) | carrier,
             f'{program.name}: the model genesis is not the deployed genesis')
     verdicts = st.interestc('verdicts', program.path, 'F').strip() if 'cast' in program.entries else ''
     return dataclasses.replace(program, verdicts=verdicts), runtime
@@ -644,6 +703,11 @@ def main():
             seen |= sequence(program, runtime, seed, length, args)[1]
             sequences, steps = sequences + 1, steps + length
         require(cover <= seen, f'{program.name}: the sequences miss {sorted(cover - seen)}')
+    program, runtime = load(DEBREU_TOKEN)
+    seen = set()
+    for seed in TOKEN_SEEDS:
+        seen |= sequence(program, runtime, seed, TOKEN_LENGTH, TOKEN_ARGS)[1]
+    require(COVER_TOKEN <= seen, f'{program.name}: the sequences miss {sorted(COVER_TOKEN - seen)}')
     debreu, impossible, erc721 = built['debreu'], built['impossibility'], built['erc721']
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
@@ -652,7 +716,7 @@ def main():
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))
     print(f'CLAIMS sequences={sequences} steps={steps} laws={laws} contract={contract} geth=model OK'
-          f' (logs: {st.WORK})')
+          f' token: sequences={len(TOKEN_SEEDS)} steps={len(TOKEN_SEEDS) * TOKEN_LENGTH} (logs: {st.WORK})')
 
 
 if __name__ == '__main__':

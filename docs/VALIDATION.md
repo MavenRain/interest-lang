@@ -6,17 +6,18 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `make` from this tree (the tree has commits). Host kit: lang-template
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
-`make check` passes after slice O11L. It builds `build/interestc`,
+`make check` passes after slice O5b. It builds `build/interestc`,
 `build/parsetool`, `build/evm-boundaries` and the three test-domain
 compilers with tcc, compiles the sources and the test tools with the C
 compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
-gate runs these steps: parse 28 round trips, embed-safety, check 53 cases,
-build output 27 checks, EVM signature boundaries 4 checks, refusal 49
+gate runs these steps: parse 28 round trips, embed-safety, check 56 cases,
+build output 29 checks, EVM signature boundaries 4 checks, refusal 49
 cases, normal forms 10, the differential test (27 vectors at k = 3),
 domain tests 11, the differential test of the k = 4 domain (64 vectors),
-settlement 191 cases with 5 deploys and a gas ceiling on their 191 EVM
+settlement 209 cases with 9 deploys and a gas ceiling on their 214 EVM
 calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 500
-steps, 100 law calls, 87 contract checks).
+steps, 100 law calls, 87 contract checks, and a token run of 10
+sequences totaling 200 steps).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
 with `make clean`.
@@ -160,6 +161,32 @@ mutants make the gate fail: a `withdraw` that keeps the remainder as the
 claim of h (the R2 form; `withdrawClaim` fails first), and a `recycle`
 that moves the whole wei of the dust to the sale reserve
 (`withdrawCarry` fails first).
+
+The O5b slice added the ERC-20 asset carrier (SPEC R3, re-ruled
+2026-10-09). A probe with geth `evm run --prestate` showed that a call to
+a token account of the prestate is visible: the return word, a revert (an
+`error` row at depth 2, the outer call succeeds), no return data, and a
+false word. An address with no code gives the same result as a STOP, so
+the creation code checks EXTCODESIZE. `examples/arrow-debreu-token.lang`
+is the Debreu example with `def asset : AssetMode := token`.
+`test/evmtool.c` has the verb `token VARIANT`, which writes the stub
+tokens (standard, noreturn, false, revert, fee, hook). `test/settlement.py`
+has 4 new deploy rows (deploy-token, -missing, -no-code, -high-bits) and
+18 carrier cases (deposit-token, -no-approve, -value, -fee, -hook,
+-noreturn, -false, -revert, -direct; withdraw-token, -revert, -false,
+-noreturn, -zero, -recycle, -wrap; distribute-token; view-token-value), so
+its cases went to 209 (deploy 9) and the gas ceiling to 214 calls. No wei
+gas line changed. `test/check.sh` has 3 new rows (check went from 53 to
+56), and `test/build-output.sh` has 2 (27 to 29). `test/claims.py` runs
+the Debreu program in token mode with a standard stub token: 10
+sequences of 20 steps (seeds 1 to 10). The model keeps the carrier
+balance of each wallet and of the contract, and after each call the
+solvency law S x balanceOf(this) = the claims + DUST + S x (R0 + R1)
+holds exactly on the geth state. The wei counts did not change. Two
+mutants make the gate fail: a `withdraw` that ignores the result of
+`transfer` (`example-debreu-token-withdraw-token-revert` fails first),
+and a `deposit` that skips the balance delta check
+(`example-debreu-token-deposit-token-fee` fails first).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

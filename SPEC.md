@@ -83,6 +83,11 @@ types of section 4, the operations of section 5 and the formers of section
 The compiler writes the ERC-20 read facade (section 7). A program cannot add
 to it.
 
+The optional def `asset : AssetMode` selects the program asset: `wei`
+(native wei, the default when the def is absent) or `token` (the units of
+one ERC-20 carrier, O5b). The allowance surface stays refused in token mode:
+the contract calls `transferFrom` on the carrier, but it does not offer it.
+
 A program that does not check is refused with a `TYPE_`, `LEX_` or `PARSE_`
 code (`docs/host/README.md`, section Refusals). A refusal is one line on
 stderr, `interestc: CODE: DEF: message`, and exit 1. A usage or IO error exits 2.
@@ -143,11 +148,14 @@ ruling is given.
 | `Cap` | the q-dependence of R | `mu`: `deny`, `upTo n`, `any` |
 | `Restriction` | `R : Identity x Identity x Q>=0 -> Prop` ("Semantic domain") | `Profile -> Profile -> Cap`; `R(h, k, q) := admits (rule (prof h) (prof k)) q`. R reads only identity claims |
 | `Charter` | an object of D: an admissible (R, W) and the trusted issuers ("Semantic domain", "One meaning, three representations") | finite `mu` of named charters in `domain/domain.lang`, decision codes in declaration order (O9); a program gives, for each charter, a `Restriction`, a `Waterfall` and an issuer list. M0 has 3 charters, `open`, `restricted`, `frozen` (codes 1 to 3), so k = 3 (RULED 2026-10-08 (USER)) |
-| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (wei), an accrual index, a claim numerator for each identity (units of `1/S` wei, R2) and the dust (units of `1/S` wei, O11): `prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))`. The embedded language and the EVM contract have the same fields |
+| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (asset units), an accrual index, a claim numerator for each identity (units of `1/S` asset unit, R2) and the dust (units of `1/S` asset unit, O11): `prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))`. The embedded language and the EVM contract have the same fields |
 | `InterestState` | `(mu, W, R, treasury)` ("Semantic domain") | `prod (Measure, prod (Charter, Treasury))`; W and R come from the active charter |
 | `OwnershipDAO F` | `Sigma (L : Aggregation act F). InterestState` | `(L : Aggregation F) * InterestState` |
 
-`Asset` is native wei, `uint256` (RULED 2026-10-07 (USER), R3). The supply S
+`Asset` is a `uint256` amount of the program asset: native wei (the default)
+or the units of one ERC-20 carrier (`def asset : AssetMode := token`, O5b).
+R3 (RULED 2026-10-07 (USER): native wei) was re-ruled 2026-10-09 (USER):
+wei and the carrier, one program data switch. The supply S
 is fixed at genesis. Transfer conserves it (RULED 2026-10-07 (USER), R2).
 
 ### 4.1 The aggregation at a discrete decision space
@@ -169,7 +177,7 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `R(h, k, q)` and `q <= mass h`; otherwise `none`. Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
-| `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` wei. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance = sum of the claims + dust + S * (reserve[rent] + reserve[sale])` |
+| `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` asset units. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance >= sum of the claims + dust + S * (reserve[rent] + reserve[sale])`, where `balance` is the asset balance of the contract (the wei balance, or `balanceOf(this)` of the carrier); the two sides are equal when no direct transfer adds to the balance |
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
@@ -204,16 +212,24 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   active charter (the `start` charter of the program, O6). Then it returns
   the runtime code. Repeated genesis wallets are refused with
   `CONTRACT_GENESIS`; distinct wallets may share an identity.
+  In token mode (`asset token`, O5b), the creation code first reads the
+  constructor word, the last 32 bytes of the init code, as the carrier
+  address. A missing or extra word, the word 0, a word with a bit above
+  bit 159, or an address with no code reverts the creation. Then CARRIER
+  := the word.
 - **Storage.** The `mu` mapping, the registry mapping (wallet to identity),
   the profile mapping, the active charter slot, `reserve[rent]`,
-  `reserve[sale]`, the accrual index, the dust (O11), and the checkpoint
+  `reserve[sale]`, the accrual index, the dust (O11), the carrier address
+  (CARRIER, slot 9, token mode only, O5b), and the checkpoint
   and numerator mappings for each identity. A mapping slot is `keccak256(key word, base
   slot word)`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
   profiles, the W gates, the issuers) and the verdict table are data in the
   runtime code. The runtime reads them with CODECOPY. The tally index comes
   from the ballot counts.
-- **Entries.** `deposit(kind)` is payable. The other entries are
+- **Entries.** In wei mode, `deposit(kind)` is payable. In token mode,
+  `deposit(kind, a)` is not payable: it pulls a units of the carrier with
+  `transferFrom(caller, this, a)` (O5b). The other entries are
   `distribute(kind)`, `withdraw()`, `transfer(to, q)`, `attest(w, h, p)`,
   `recover(from, to, q)`, `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
   `claimOf(h)`, `charter()`, `reserve(kind)` and `selfConstituting()` (a
@@ -243,8 +259,16 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   Like `transfer`, `recover` settles both identities before it moves `mu`.
   An entry of section 6 that has no meaning in
   the regime reverts.
+  In token mode every entry reverts on value. A carrier call that fails,
+  that returns false, or that returns 1 to 31 bytes reverts the entry: the
+  call must succeed with no return data, or with 32 bytes or more and the
+  first word 1. `deposit` reads `balanceOf(this)` of the carrier before
+  and after the `transferFrom`, and reverts unless the balance grew by
+  exactly a (no fee on transfer).
 - **Withdraw.** `withdraw` writes NUM, then `reserve[rent]`, then DUST,
-  then logs the `Paid` record, before the CALL that pays the wei (O11).
+  then logs the `Paid` record, before the CALL that pays the asset (O11).
+  In token mode the payment is the carrier call `transfer(caller, paid)`,
+  and a `withdraw` that pays 0 makes no carrier call (O5b).
 
 ## 8. Host and target
 
@@ -290,7 +314,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `S = 1` (a Dirac measure).
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events. O5a (2026-10-09): the read facade and the `Transfer`
-  event. Open: the ERC-20 asset carrier (R3), O5b.
+  event. O5b (2026-10-09): the ERC-20 asset carrier (R3 re-ruled,
+  section 4). Open: the write facade, O5c.
 - O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
   program gives the genesis charter, and it can be any declared charter.
   `examples/arrow-debreu.lang` has `start restricted`, the second declared
@@ -349,12 +374,13 @@ Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
-cases. After O11L (2026-10-09), `make check` passes on the interest-lang
-domain and the three examples: parse 28, check 53, build output 27, EVM
+cases. After O5b (2026-10-09), `make check` passes on the interest-lang
+domain and the four examples: parse 28, check 56, build output 29, EVM
 boundaries 4, refusal 49, normal forms 10, differential 27 and 64 vectors,
-domain tests 11, settlement 191 cases with 5 deploys (191 EVM calls under
+domain tests 11, settlement 209 cases with 9 deploys (214 EVM calls under
 the gas ceiling of `test/gas-baseline.txt`), claims 20 sequences (500
-steps), 100 law calls and 87 contract checks, 0 failures
+steps), 100 law calls and 87 contract checks, and a token run of 10
+sequences (200 steps), 0 failures
 (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
 applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
 this tree. I6 removed the two differences from the kit that

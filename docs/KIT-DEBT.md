@@ -118,6 +118,9 @@ that alias the source file, including hard links and symlinks
     (`src/asm.h`, `src/evm.c`), so the domain can select an entry table
     from the program data; the stub in `test/evm-boundaries.c` follows.
     `lang_data` (`src/check.c`) reads the optional def `asset`.
+    `test/evmtool.c` (verb `token`) assembles the stub tokens with the kit
+    assembler and resolves their label sites with its own copy of the
+    8-line `resolve` of `src/evm.c`, because the core does not export it.
 
 ## Differences that remain
 

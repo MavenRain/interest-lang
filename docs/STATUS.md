@@ -36,8 +36,15 @@ milestone of SPEC section 10 is open.
   `Paid` event of `withdraw`. The embedded language follows the same rule:
   `Treasury` has the dust as its last field, and `withdraw` moves the
   remainder to the dust (slice O11L).
-- Three examples: a Debreu charter vote, a labelled-constitution
-  impossibility and an ERC-721 Dirac measure with S = 1 (slice I5).
+- The ERC-20 asset carrier (slice O5b): the optional def
+  `asset : AssetMode := token` makes the asset the units of one ERC-20
+  carrier. The constructor word gives the carrier address (CARRIER, slot
+  9). `deposit(kind, a)` pulls a with `transferFrom` and checks the
+  balance delta, and `withdraw` pays with `transfer`. The default `wei`
+  mode does not change.
+- Four examples: a Debreu charter vote, a labelled-constitution
+  impossibility and an ERC-721 Dirac measure with S = 1 (slice I5), and
+  the Debreu example in token mode (slice O5b).
 
 ## Remaining work
 
@@ -81,6 +88,13 @@ milestone of SPEC section 10 is open.
   MU, so a wallet reads its mass only at the address of its identity. The
   ERC-721 example has the ERC-20 facade, not the ERC-721 ABI (`ownerOf`,
   the `Transfer` event with an indexed token id).
+- The carrier must be a standard ERC-20: no fee on transfer and no
+  rebase. `deposit` reverts when the balance of the contract does not grow
+  by exactly a, and a rebase changes the balance without an entry call.
+- A direct transfer of the carrier to the contract stays locked: no entry
+  pays it out, so the solvency law holds with `>=`.
+- Genesis wallets and identities are below 2^64, because `Nat` in the
+  checker is a 64-bit word (KL4).
 
 ## Internal boundaries
 
