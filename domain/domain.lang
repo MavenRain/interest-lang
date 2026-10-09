@@ -371,10 +371,11 @@ def release : Gate -> Nat -> Nat := fun (g : Gate) (a : Nat) =>
 
 -- @section 10 Treasury and state
 -- SPEC section 4, rows `Treasury`, `InterestState` and `OwnershipDAO`: a
--- reserve for each kind (wei), the accrual index, and a claim numerator for
--- each identity (units of `1/S` wei).  The state holds the measure, the
--- active charter and the treasury; W and R come from the active charter.
-def Treasury : Type 0 := prod (Kind -> Nat, prod (Nat, Identity -> Nat))
+-- reserve for each kind (wei), the accrual index, a claim numerator for
+-- each identity and the dust (both in units of `1/S` wei, O11).  The state
+-- holds the measure, the active charter and the treasury; W and R come
+-- from the active charter.
+def Treasury : Type 0 := prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))
 
 def InterestState : Type 0 := prod (Measure, prod (Charter, Treasury))
 
@@ -399,10 +400,13 @@ def subReserve : (Kind -> Nat) -> Kind -> Nat -> Kind -> Nat :=
     | 0 (u : prod ()) => r j
     | 1 (u : prod ()) => natSub (r j) a
 
--- `num s h` is the claim numerator of `h` in `s`; `setNum n h v` is `n`
--- with the numerator of `h` set to `v`.
+-- `num s h` is the claim numerator of `h` in `s`; `dust s` is the treasury
+-- dust of `s`; `setNum n h v` is `n` with the numerator of `h` set to `v`.
 def num : InterestState -> Identity -> Nat := fun (s : InterestState) (h : Identity) =>
-  s.1.1.1.1 h
+  s.1.1.1.1.0 h
+
+def dust : InterestState -> Nat := fun (s : InterestState) =>
+  s.1.1.1.1.1
 
 def setNum : (Identity -> Nat) -> Identity -> Nat -> Identity -> Nat :=
   fun (n : Identity -> Nat) (h : Identity) (v : Nat) (k : Identity) =>
@@ -450,19 +454,31 @@ def amendState : (F : ChoiceRule) -> Aggregation F -> Config -> InterestState ->
   fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (s : InterestState) =>
     tuple (s.0, tuple (gov F L x, s.1.1))
 
--- `withdraw h S s` pays `natDiv (num s h) S` wei to `h` and keeps
--- `natMod (num s h) S` as the claim of `h` (R2), so paid * S + kept = num
--- when S > 0.  At S = 0 the kernel gives `natDiv n 0 = natMod n 0 = 0` (as
--- the EVM DIV and MOD): it pays 0 and the claim becomes 0.
+-- `recycle h S s` (O11): the claim of `h` becomes 0 and its remainder
+-- `natMod (num s h) S` goes to the dust; the whole wei of the dust go to
+-- `reserve[rent]`, and the dust keeps `natMod dust S`.
+def recycle : Identity -> Nat -> InterestState -> InterestState :=
+  fun (h : Identity) (S : Nat) (s : InterestState) =>
+    tuple (s.0, tuple (s.1.0, tuple (addReserve s.1.1.0 rent (natDiv (natAdd (dust s) (natMod (num s h) S)) S), tuple (s.1.1.1.0, tuple (setNum s.1.1.1.1.0 h 0, natMod (natAdd (dust s) (natMod (num s h) S)) S)))))
+
+-- `withdraw h S s` pays `natDiv (num s h) S` wei to `h` (O11).  When it
+-- pays 1 wei or more, the state becomes `recycle h S s`.  When it pays 0
+-- wei, the state does not change: the claim of `h` stays.  At S = 0 the
+-- kernel gives `natDiv n 0 = 0` (as the EVM DIV), so it pays 0.  Law:
+-- `num h + dust + S * reserve[rent]` falls by exactly `S * paid`, and no
+-- other part of the state changes.
 def withdraw : Identity -> Nat -> InterestState -> prod (Nat, InterestState) :=
   fun (h : Identity) (S : Nat) (s : InterestState) =>
-    tuple (natDiv (num s h) S, tuple (s.0, tuple (s.1.0, tuple (s.1.1.0, tuple (s.1.1.1.0, setNum s.1.1.1.1 h (natMod (num s h) S))))))
+    case natEq (natDiv (num s h) S) 0 with
+    | 0 (u : prod ()) => tuple (natDiv (num s h) S, recycle h S s)
+    | 1 (u : prod ()) => tuple (0, s)
 
 -- `accrue i d s`: the reserve of kind `i` drops by `d` and the claim
--- numerator of each identity `k` grows by `natMul (mass k) d`.
+-- numerator of each identity `k` grows by `natMul (mass k) d`.  The dust
+-- does not change.
 def accrue : Kind -> Nat -> InterestState -> InterestState :=
   fun (i : Kind) (d : Nat) (s : InterestState) =>
-    tuple (s.0, tuple (s.1.0, tuple (subReserve s.1.1.0 i d, tuple (s.1.1.1.0, fun (k : Identity) => natAdd (s.1.1.1.1 k) (natMul (mass s.0 k) d)))))
+    tuple (s.0, tuple (s.1.0, tuple (subReserve s.1.1.0 i d, tuple (s.1.1.1.0, tuple (fun (k : Identity) => natAdd (s.1.1.1.1.0 k) (natMul (mass s.0 k) d), s.1.1.1.1.1)))))
 
 -- `distribute F oL W S i s` (SPEC section 5) is none at impossibility (the
 -- aggregation `oL` is none) and none at S = 0.  Else it releases

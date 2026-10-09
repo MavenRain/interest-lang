@@ -61,6 +61,7 @@ expect "eval conserved" 0 "reflNat 5" eval "$programs/arrow-debreu.lang" conserv
 expect "eval transferConserves" 0 "reflNat 5" eval "$programs/arrow-debreu.lang" transferConserves
 expect "eval amendCharter" 0 "reflDec open" eval "$programs/arrow-debreu.lang" amendCharter
 expect "eval withdrawLaw" 0 "reflNat 17" eval "$programs/arrow-debreu.lang" withdrawLaw
+expect "eval withdrawCarry" 0 "reflNat 41" eval "$programs/arrow-debreu.lang" withdrawCarry
 expect "eval distributeSum" 0 "reflNat 52" eval "$programs/arrow-debreu.lang" distributeSum
 expect "eval attestRegistry" 0 "reflNat 1" eval "$programs/arrow-debreu.lang" attestRegistry
 expect "eval firstX" 0 "reflDec open" eval "$programs/arrow-impossibility.lang" firstX

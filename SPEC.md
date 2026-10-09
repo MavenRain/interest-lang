@@ -143,7 +143,7 @@ ruling is given.
 | `Cap` | the q-dependence of R | `mu`: `deny`, `upTo n`, `any` |
 | `Restriction` | `R : Identity x Identity x Q>=0 -> Prop` ("Semantic domain") | `Profile -> Profile -> Cap`; `R(h, k, q) := admits (rule (prof h) (prof k)) q`. R reads only identity claims |
 | `Charter` | an object of D: an admissible (R, W) and the trusted issuers ("Semantic domain", "One meaning, three representations") | finite `mu` of named charters in `domain/domain.lang`, decision codes in declaration order (O9); a program gives, for each charter, a `Restriction`, a `Waterfall` and an issuer list. M0 has 3 charters, `open`, `restricted`, `frozen` (codes 1 to 3), so k = 3 (RULED 2026-10-08 (USER)) |
-| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (wei), an accrual index, and a claim numerator for each identity (units of `1/S` wei, R2). The EVM treasury also stores dust (O11); the embedded language type has no dust field |
+| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (wei), an accrual index, a claim numerator for each identity (units of `1/S` wei, R2) and the dust (units of `1/S` wei, O11): `prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))`. The embedded language and the EVM contract have the same fields |
 | `InterestState` | `(mu, W, R, treasury)` ("Semantic domain") | `prod (Measure, prod (Charter, Treasury))`; W and R come from the active charter |
 | `OwnershipDAO F` | `Sigma (L : Aggregation act F). InterestState` | `(L : Aggregation F) * InterestState` |
 
@@ -169,18 +169,11 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `R(h, k, q)` and `q <= mass h`; otherwise `none`. Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
-| `withdraw h s` | `prod (Nat, InterestState)` | the embedded language pays `floor(num h / S)` wei and keeps `num h mod S` as the claim of h (R2). The EVM contract instead moves that remainder to dust when it pays 1 wei or more, and the whole wei of dust go to `reserve[rent]`; when it pays 0 wei, the remainder stays the claim of h (O11). EVM solvency law: `S * balance = sum of the claims + dust + S * (reserve[rent] + reserve[sale])` |
+| `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` wei. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance = sum of the claims + dust + S * (reserve[rent] + reserve[sale])` |
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
 | `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3). `some (debit h q ; credit k q)` if and only if `c` is a trusted issuer (`I`) of the active charter and `q <= mass h`; otherwise `none`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
-
-O11 is currently implemented in the EVM contract and the reference model
-in `test/claims.py`. The embedded `Treasury` and `withdraw` in
-`domain/domain.lang` retain the R2 representation and remainder rule.
-For example, `eval examples/arrow-debreu.lang w5` pays 3 wei at S = 5 and
-keeps 2 units of the 17-unit claim. The language's checked withdrawal
-laws do not establish O11; its dust and solvency checks run in geth.
 
 Transfer then distribute: the claim travels with the token. Before a
 transfer moves `mu`, the contract checkpoints both identities: it settles
@@ -339,7 +332,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   settlement cases `accrual-debreu-withdraw-recycle`,
   `accrual-debreu-withdraw-recycle-wrap` and
   `accrual-debreu-withdraw-kept-dust` and the claims law calls
-  `law-dust-recycle-*` pin this ruling.
+  `law-dust-recycle-*` pin this ruling. Slice O11L (2026-10-09): the
+  embedded language follows this ruling.
 
 ## 10. Milestones
 
@@ -355,13 +349,13 @@ Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 lang-template `1aa27ae`. At I1, `make check` passed on the sample escrow
 domain: parse 27, check 25, refusal 35, normal forms 7, differential 27
 vectors (k = 3) and 64 vectors (k = 4), domain tests 11, settlement 60
-cases. After L1, `make check` passes on the interest-lang domain and the
-three examples: parse 28, check 52, build output 27, refusal 49, normal
-forms 10,
-differential 27 and 64 vectors, domain tests 11, settlement 175 cases
-(175 EVM calls under the gas ceiling of `test/gas-baseline.txt`),
-claims 20 sequences (500 steps), 99 law calls and 70 contract checks, 0
-failures (`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
+cases. After O11L (2026-10-09), `make check` passes on the interest-lang
+domain and the three examples: parse 28, check 53, build output 27, EVM
+boundaries 4, refusal 49, normal forms 10, differential 27 and 64 vectors,
+domain tests 11, settlement 191 cases with 5 deploys (191 EVM calls under
+the gas ceiling of `test/gas-baseline.txt`), claims 20 sequences (500
+steps), 100 law calls and 87 contract checks, 0 failures
+(`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
 applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
 this tree. I6 removed the two differences from the kit that
 `docs/KIT-DEBT.md` records: the program data uses the kit hooks

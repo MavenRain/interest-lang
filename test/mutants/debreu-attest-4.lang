@@ -56,7 +56,7 @@ def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Pr
   | restricted => upTo 4
   | frozen => deny
 def prof : Profiles := fun (h : Identity) => tuple (domestic, retail)
-def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 0))
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
 def s0 : InterestState := tuple (m1, tuple (restricted, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>
@@ -90,18 +90,32 @@ def amendMass : EqNat (natAdd (mass s3.0 1) (mass s3.0 2)) (natAdd (mass s2.0 1)
 def amendReserve : EqNat (s3.1.1.0 rent) (s2.1.1.0 rent) := reflNat 7
 def dao : OwnershipDAO F := (agg, s3)
 
--- withdraw (SPEC section 5, R2): 17 units of claim at supply S = 5 pay 3
--- wei and keep 2, so paid * S + kept = num.  At S = 0 it pays 0 and the
--- claim becomes 0 (natMod 17 0 = 0).
-def tW : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 17))
+-- withdraw (SPEC section 5, O11): 17 units of claim at supply S = 5 pay 3
+-- wei.  The claim becomes 0 and the remainder 2 goes to the dust.  Law:
+-- S * paid + num h + dust + S * reserve[rent] does not change, and the
+-- other claims and reserve[sale] do not change.  In `sC` (a reserve of 4
+-- for each kind, dust 4) the dust 4 + 2 holds 1 whole wei: reserve[rent]
+-- grows by 1 and the dust keeps 1.  A withdraw that pays 0 (at S = 0, or
+-- 17 units at S = 20) does not change the state.
+def tW : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 17, 0)))
 def sW : InterestState := tuple (m1, tuple (restricted, tW))
 def w5 : prod (Nat, InterestState) := withdraw 1 5 sW
-def withdrawLaw : EqNat (natAdd (natMul w5.0 5) (num w5.1 1)) (num sW 1) := reflNat 17
+def withdrawLaw : EqNat (natAdd (natMul w5.0 5) (natAdd (natAdd (num w5.1 1) (dust w5.1)) (natMul 5 (w5.1.1.1.0 rent)))) (natAdd (natAdd (num sW 1) (dust sW)) (natMul 5 (sW.1.1.0 rent))) := reflNat 17
 def withdrawPays : EqNat w5.0 3 := reflNat 3
+def withdrawClaim : EqNat (num w5.1 1) 0 := reflNat 0
+def withdrawDust : EqNat (dust w5.1) 2 := reflNat 2
 def withdrawOther : EqNat (num w5.1 2) 17 := reflNat 17
+def tC : Treasury := tuple (fun (j : Kind) => 4, tuple (0, tuple (fun (h : Identity) => 17, 4)))
+def sC : InterestState := tuple (m1, tuple (restricted, tC))
+def wC : prod (Nat, InterestState) := withdraw 1 5 sC
+def withdrawCarry : EqNat (natAdd (natMul wC.0 5) (natAdd (natAdd (num wC.1 1) (dust wC.1)) (natMul 5 (wC.1.1.1.0 rent)))) (natAdd (natAdd (num sC 1) (dust sC)) (natMul 5 (sC.1.1.0 rent))) := reflNat 41
+def withdrawCarryReserve : EqNat (wC.1.1.1.0 rent) 5 := reflNat 5
+def withdrawCarryDust : EqNat (dust wC.1) 1 := reflNat 1
+def withdrawCarrySale : EqNat (wC.1.1.1.0 sale) 4 := reflNat 4
 def w0 : prod (Nat, InterestState) := withdraw 1 0 sW
-def withdrawZero : EqNat (num w0.1 1) 0 := reflNat 0
+def withdrawZero : EqNat (num w0.1 1) 17 := reflNat 17
 def withdrawZeroPays : EqNat w0.0 0 := reflNat 0
+def withdrawSmall : EqNat (natAdd (num (withdraw 1 20 sC).1 1) (dust (withdraw 1 20 sC).1)) 21 := reflNat 21
 
 -- distribute (SPEC section 5): `wf` passes rent and retains sale.  The
 -- masses 3 + 2 of `s1` sum to S = 5, the reserve holds rent 10 and sale 4,
@@ -111,7 +125,7 @@ def wf : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
   match j as w in Kind return Gate with
   | rent => pass
   | sale => retain
-def tD : Treasury := tuple (addReserve (fun (j : Kind) => 4) rent 6, tuple (0, fun (h : Identity) => 1))
+def tD : Treasury := tuple (addReserve (fun (j : Kind) => 4) rent 6, tuple (0, tuple (fun (h : Identity) => 1, 0)))
 def sD : InterestState := tuple (s1.0, tuple (restricted, tD))
 def oA : Option (Aggregation F) := pureOption (Aggregation F) agg
 def d1 : InterestState := stateOr sW (distribute F oA wf 5 rent sD)

@@ -48,7 +48,7 @@ def prof : Profiles := fun (h : Identity) =>
   case natEq h 2 with
   | 0 (u : prod ()) => tuple (domestic, retail)
   | 1 (u : prod ()) => tuple (foreign, accredited)
-def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 0))
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
 def s0 : InterestState := tuple (m1, tuple (open, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>

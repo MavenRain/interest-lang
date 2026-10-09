@@ -33,7 +33,9 @@ milestone of SPEC section 10 is open.
   operation sequences, the law vectors and the contract checks (slice I4).
 - The remainder rule of `withdraw` (slice L6, SPEC O11): the treasury
   dust (slot 8), the move of its whole wei to the rent reserve, and the
-  `Paid` event of `withdraw`.
+  `Paid` event of `withdraw`. The embedded language follows the same rule:
+  `Treasury` has the dust as its last field, and `withdraw` moves the
+  remainder to the dust (slice O11L).
 - Three examples: a Debreu charter vote, a labelled-constitution
   impossibility and an ERC-721 Dirac measure with S = 1 (slice I5).
 
@@ -63,10 +65,6 @@ milestone of SPEC section 10 is open.
   contract computes with 256-bit words and reverts on a wrap.
 - At most 32 genesis rows, 4 profiles and 2 payment kinds
   (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS` in `domain/data.h`).
-- The embedded language's `Treasury` and `withdraw` retain the R2
-  representation and remainder rule. O11 is implemented in the EVM
-  contract and `test/claims.py`; the language's checked withdrawal laws
-  do not cover the dust recycling or its solvency law (SPEC section 5).
 - In the contract, when `withdraw` pays 1 wei or more, it moves NUM mod S of
   the identity to the treasury dust (DUST, slot 8). The whole wei of DUST
   go to the rent reserve, so less than 1 wei stays in DUST. A `withdraw`

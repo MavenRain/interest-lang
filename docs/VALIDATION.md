@@ -1,21 +1,22 @@
 # Validation
 
-Date: 2026-10-08. TinyCC: tcc 0.9.28rc 2026-09-04 mob@0fb54300 (AArch64
+Date: 2026-10-09. TinyCC: tcc 0.9.28rc 2026-09-04 mob@0fb54300 (AArch64
 Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 2024-12-20). Python: 3.14.7. Host executable: `build/interestc`, built by
-`make` from this tree (the tree has no commit yet). Host kit: lang-template
+`make` from this tree (the tree has commits). Host kit: lang-template
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
-`make check` passes after the staged-change review fixes. It builds `build/interestc`,
-`build/parsetool`, `build/evm-boundaries` and the three test-domain compilers with tcc, compiles the
-sources and the test tools with the C compiler as a second check
-(`check-clang`), and runs `test/gate.sh`. The gate runs these steps: parse 28 round trips,
-embed-safety, check 52 cases, build output 27 checks, EVM signature boundaries 4 checks, refusal
-49 cases, normal forms 10, the
-differential test (27 vectors at k = 3), domain tests 11, the differential
-test of the k = 4 domain (64 vectors), settlement 175 cases with 5 deploys
-and a gas ceiling on their 175 EVM calls (`test/gas-baseline.txt`),
-and claims (20 sequences totaling 500 steps, 99 law calls, 70 contract checks).
+`make check` passes after slice O11L. It builds `build/interestc`,
+`build/parsetool`, `build/evm-boundaries` and the three test-domain
+compilers with tcc, compiles the sources and the test tools with the C
+compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
+gate runs these steps: parse 28 round trips, embed-safety, check 53 cases,
+build output 27 checks, EVM signature boundaries 4 checks, refusal 49
+cases, normal forms 10, the differential test (27 vectors at k = 3),
+domain tests 11, the differential test of the k = 4 domain (64 vectors),
+settlement 191 cases with 5 deploys and a gas ceiling on their 191 EVM
+calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 500
+steps, 100 law calls, 87 contract checks).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
 with `make clean`.
@@ -133,6 +134,32 @@ and of each deploy with code went up; no gas line went down. Two mutants
 make the gate fail: the recycle to the sale reserve
 (`accrual-debreu-withdraw-recycle` fails first), and the `Transfer`
 signature in `paid_log` (`accrual-debreu-withdraw-floor` fails first).
+
+The O11L slice made the embedded language follow O11. `Treasury` in
+`domain/domain.lang` has the dust as its last field (units of 1/S wei). A
+`withdraw` that pays 1 wei or more sets the claim of h to 0 and moves
+NUM mod S to the dust, and the whole wei of the dust go to the rent
+reserve. A `withdraw` that pays 0 wei, also at S = 0, does not change the
+state. `examples/arrow-debreu.lang` checks the local law of `withdraw` by
+refl: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and
+`num h + dust + S x reserve[rent]` falls by exactly S x paid. At S = 5
+and dust 0, the claim of 17 units pays 3 wei and 2 units go to the dust
+(`withdrawLaw`, `withdrawClaim` 0, `withdrawDust` 2). At dust 4 and rent
+reserve 4, the same claim pays 3 wei, 1 wei goes to the rent reserve and
+1 unit stays in the dust (`withdrawCarry` 41, `withdrawCarryReserve` 5,
+`withdrawCarryDust` 1, `withdrawCarrySale` 4). `withdrawSmall` checks
+that a payment of 0 wei keeps the claim and the dust. `withdrawZero`
+went from 0 to 17: at S = 0 the R2 form lost the claim, and O11L keeps
+it. The 6 mutants in `test/mutants` that copy the head of the example
+(transfer-3, amend-4, withdraw-4, share-30, attest-4, sum-51) were made
+again from the new example; their mutated lines and their refusal
+messages did not change. `test/check.sh` has 1 new case
+(`eval withdrawCarry`), so check went from 52 to 53. The other counts did
+not change, because the contract and the model did not change. Two
+mutants make the gate fail: a `withdraw` that keeps the remainder as the
+claim of h (the R2 form; `withdrawClaim` fails first), and a `recycle`
+that moves the whole wei of the dust to the sale reserve
+(`withdrawCarry` fails first).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

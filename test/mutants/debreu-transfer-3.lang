@@ -56,7 +56,7 @@ def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Pr
   | restricted => upTo 4
   | frozen => deny
 def prof : Profiles := fun (h : Identity) => tuple (domestic, retail)
-def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, fun (h : Identity) => 0))
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
 def s0 : InterestState := tuple (m1, tuple (restricted, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>
