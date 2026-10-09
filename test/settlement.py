@@ -24,7 +24,7 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                nonce='0x0000000000000000', timestamp='0x0', number='0x0',
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
-MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM = range(8)
+MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST = range(9)
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
@@ -32,6 +32,7 @@ DEBREU = ROOT / 'examples/arrow-debreu.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
 SIGNATURES = {'balanceOf': 'balanceOf(address)'}
 TRANSFER = 'Transfer(address,address,uint256)'
+PAID = 'Paid(uint256,address,uint256,uint256)'
 LOGS = '#### LOGS ####'
 
 
@@ -93,13 +94,19 @@ def wallet(number):
 
 
 @functools.cache
-def topic0():
-    return checked(['cast', 'keccak', TRANSFER]).strip()[2:]
+def topic0(signature=TRANSFER):
+    return checked(['cast', 'keccak', signature]).strip()[2:]
 
 
 def transfer_log(source, target, value, address=RECEIVER):
     """The Transfer(source, target, value) record of the account at ADDRESS."""
     return (address, (topic0(), f'{source:064x}', f'{target:064x}'), f'{value:064x}')
+
+
+def paid_log(h, wallet, paid, moved, address=RECEIVER):
+    """The Paid(h, wallet, paid, moved) record of withdraw (L6) at ADDRESS: topic1 is the identity,
+    topic2 the calling wallet, the data the paid wei and the dust that moved."""
+    return (address, (topic0(PAID), f'{h:064x}', f'{wallet:064x}'), f'{paid:064x}{moved:064x}')
 
 
 def log_records(text):
@@ -167,15 +174,15 @@ def expect(name, code, calldata, before, after, result, *, value=0, sender=SENDE
     require(got == wanted, f'{name}: EVM {got} != {wanted}')
 
 
-def paid_case(name, code, calldata, before, after, result, *, balance, sender):
-    """withdraw with RECEIVER funded by BALANCE wei: on success the sender gains RESULT wei
-    and RECEIVER keeps BALANCE - RESULT."""
+def paid_case(name, code, calldata, before, after, result, *, balance, sender, logs=()):
+    """withdraw with RECEIVER funded by BALANCE wei: on success the sender gains RESULT wei,
+    RECEIVER keeps BALANCE - RESULT and the call logs LOGS."""
     actual = run(name, code, calldata, before=before, sender=sender, balance=balance)
     paid = 0 if result is None else result
     wanted = dict(status='revert' if result is None else 'success',
                   output='' if result is None else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v},
-                  receiver=balance - paid, sender=10**24 + paid, logs=[])
+                  receiver=balance - paid, sender=10**24 + paid, logs=list(logs))
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
                receiver=actual['balances'].get(RECEIVER, 0), sender=actual['balances'].get(sender, 0), logs=actual['logs'])
     require(got == wanted, f'{name}: EVM {got} != {wanted}')
@@ -446,16 +453,22 @@ def accrual_cases(runtime, base):
              {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3}, 1, 0, one, [transfer_log(1, 2, 4)]),
             ('transfer-settle-wrap', data('transfer', 2, 4), {**base, INDEX: 2**255}, None, None, 0, one)]
     cases = table_cases('accrual-debreu', runtime, rows)
-    for label, before, after, result, balance, sender in (
-            ('floor', accrued, {**accrued, num1: 9, cp1: 3}, 1, 5, one),
-            ('exact', {**base, INDEX: 4}, {**base, INDEX: 4, cp2: 4}, 2, 2, two),
-            ('kept', {**base, num1: 9}, None, 0, 0, one),
-            ('second-wallet', {**base, INDEX: 6}, {**base, INDEX: 6, cp2: 6}, 3, 3, wallet(4098)),
-            ('unfunded', accrued, None, None, 0, one),
-            ('no-identity', accrued, None, None, 5, SENDER),
-            ('wrap', {**base, INDEX: 2**255}, None, None, 5, one)):
+    for label, before, after, result, balance, sender, logs in (
+            ('floor', accrued, {**base, INDEX: 3, cp1: 3, DUST: 9}, 1, 5, one, [paid_log(1, 4096, 1, 9)]),
+            ('exact', {**base, INDEX: 4}, {**base, INDEX: 4, cp2: 4}, 2, 2, two, [paid_log(2, 4097, 2, 0)]),
+            ('kept', {**base, num1: 9}, None, 0, 0, one, [paid_log(1, 4096, 0, 0)]),
+            ('second-wallet', {**base, INDEX: 6}, {**base, INDEX: 6, cp2: 6}, 3, 3, wallet(4098),
+             [paid_log(2, 4098, 3, 0)]),
+            ('unfunded', accrued, None, None, 0, one, []),
+            ('no-identity', accrued, None, None, 5, SENDER, []),
+            ('wrap', {**base, INDEX: 2**255}, None, None, 5, one, []),
+            ('recycle', {**accrued, DUST: 5}, {**base, INDEX: 3, cp1: 3, rent: 1, DUST: 4}, 1, 5, one,
+             [paid_log(1, 4096, 1, 9)]),
+            ('recycle-wrap', {**accrued, DUST: 9, rent: 2**256 - 1}, None, None, 5, one, []),
+            ('kept-dust', {**base, num1: 9, DUST: 5}, None, 0, 0, one, [paid_log(1, 4096, 0, 0)])):
         cases += paid_case(f'accrual-debreu-withdraw-{label}', runtime, data('withdraw'), before,
-                           before if after is None else after, result, balance=balance, sender=sender)
+                           before if after is None else after, result, balance=balance, sender=sender,
+                           logs=logs)
     return cases
 
 
@@ -485,10 +498,11 @@ def impossibility_example_cases():
             ('total-supply-value', data('totalSupply'), base, None, None, 1, SENDER)]
     cases = table_cases('example-impossibility', runtime, rows)
     cases += paid_case('example-impossibility-withdraw', runtime, data('withdraw'), base, base, 0,
-                       balance=0, sender=one)
+                       balance=0, sender=one, logs=[paid_log(1, 4096, 0, 0)])
     accrued = {**base, INDEX: 2}
     return cases + paid_case('example-impossibility-withdraw-index', runtime, data('withdraw'), accrued,
-                             {**accrued, slot(CHECKPOINT, 1): 2}, 2, balance=2, sender=one)
+                             {**accrued, slot(CHECKPOINT, 1): 2}, 2, balance=2, sender=one,
+                             logs=[paid_log(1, 4096, 2, 0)])
 
 
 def gas_check(write):

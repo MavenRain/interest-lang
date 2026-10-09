@@ -143,7 +143,7 @@ ruling is given.
 | `Cap` | the q-dependence of R | `mu`: `deny`, `upTo n`, `any` |
 | `Restriction` | `R : Identity x Identity x Q>=0 -> Prop` ("Semantic domain") | `Profile -> Profile -> Cap`; `R(h, k, q) := admits (rule (prof h) (prof k)) q`. R reads only identity claims |
 | `Charter` | an object of D: an admissible (R, W) and the trusted issuers ("Semantic domain", "One meaning, three representations") | finite `mu` of named charters in `domain/domain.lang`, decision codes in declaration order (O9); a program gives, for each charter, a `Restriction`, a `Waterfall` and an issuer list. M0 has 3 charters, `open`, `restricted`, `frozen` (codes 1 to 3), so k = 3 (RULED 2026-10-08 (USER)) |
-| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (wei), an accrual index, and a claim numerator for each identity (units of `1/S` wei, R2) |
+| `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (wei), an accrual index, and a claim numerator for each identity (units of `1/S` wei, R2). The EVM treasury also stores dust (O11); the embedded language type has no dust field |
 | `InterestState` | `(mu, W, R, treasury)` ("Semantic domain") | `prod (Measure, prod (Charter, Treasury))`; W and R come from the active charter |
 | `OwnershipDAO F` | `Sigma (L : Aggregation act F). InterestState` | `(L : Aggregation F) * InterestState` |
 
@@ -169,11 +169,18 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `R(h, k, q)` and `q <= mass h`; otherwise `none`. Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
-| `withdraw h s` | `prod (Nat, InterestState)` | pays `floor(num h / S)` wei and keeps `num h mod S` as the claim of h (R2) |
+| `withdraw h s` | `prod (Nat, InterestState)` | the embedded language pays `floor(num h / S)` wei and keeps `num h mod S` as the claim of h (R2). The EVM contract instead moves that remainder to dust when it pays 1 wei or more, and the whole wei of dust go to `reserve[rent]`; when it pays 0 wei, the remainder stays the claim of h (O11). EVM solvency law: `S * balance = sum of the claims + dust + S * (reserve[rent] + reserve[sale])` |
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
 | `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3). `some (debit h q ; credit k q)` if and only if `c` is a trusted issuer (`I`) of the active charter and `q <= mass h`; otherwise `none`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
+
+O11 is currently implemented in the EVM contract and the reference model
+in `test/claims.py`. The embedded `Treasury` and `withdraw` in
+`domain/domain.lang` retain the R2 representation and remainder rule.
+For example, `eval examples/arrow-debreu.lang w5` pays 3 wei at S = 5 and
+keeps 2 units of the 17-unit claim. The language's checked withdrawal
+laws do not establish O11; its dust and solvency checks run in geth.
 
 Transfer then distribute: the claim travels with the token. Before a
 transfer moves `mu`, the contract checkpoints both identities: it settles
@@ -187,7 +194,7 @@ The representation lands in one regime of `self_governance_trichotomy`
 
 | Regime | Aggregation F | Entries |
 |---|---|---|
-| Arrow-impossibility | none | `deposit`, `withdraw`, `attest` (genesis issuers, O7), views. `transfer`, `distribute`, `cast` and `amend` revert. Claims freeze as measures; funds stay in the treasury, not burned and not paid |
+| Arrow-impossibility | none | `deposit`, `withdraw`, `attest` (genesis issuers, O7), views. `transfer`, `distribute`, `cast` and `amend` revert. Claims freeze as measures; funds and dust stay in the treasury, not burned and not paid |
 | Arrow-Debreu | one orbit rule | all entries |
 | Schelling-Ising | unreachable at a discrete D (section 4.1) | none |
 
@@ -206,8 +213,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `CONTRACT_GENESIS`; distinct wallets may share an identity.
 - **Storage.** The `mu` mapping, the registry mapping (wallet to identity),
   the profile mapping, the active charter slot, `reserve[rent]`,
-  `reserve[sale]`, the accrual index, and the checkpoint and numerator
-  mappings for each identity. A mapping slot is `keccak256(key word, base
+  `reserve[sale]`, the accrual index, the dust (O11), and the checkpoint
+  and numerator mappings for each identity. A mapping slot is `keccak256(key word, base
   slot word)`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
   profiles, the W gates, the issuers) and the verdict table are data in the
@@ -228,8 +235,11 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 - **Events.** A successful `transfer` and a successful `recover` log one
   `Transfer(from, to, q)` record (LOG3, the ERC-20 event; `from` and `to`
   are identities), also at `q = 0` and at `to = from`. The creation code
-  logs `Transfer(0, h, MU[h])` for each genesis identity with units. No
-  other entry logs, and a revert logs nothing.
+  logs `Transfer(0, h, MU[h])` for each genesis identity with units. A
+  successful `withdraw` logs one `Paid(h, wallet, paid, dust)` record
+  (LOG3; `h` and the calling wallet are topics, `paid` and the moved dust
+  are the data), also at `paid = 0` (O11). No other entry logs, and a
+  revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
   guard reverts. A refused transfer (R fails, `q > mass h`, or `to + 1`
@@ -240,8 +250,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   Like `transfer`, `recover` settles both identities before it moves `mu`.
   An entry of section 6 that has no meaning in
   the regime reverts.
-- **Withdraw.** `withdraw` writes the new numerator before the CALL that
-  pays the wei.
+- **Withdraw.** `withdraw` writes NUM, then `reserve[rent]`, then DUST,
+  then logs the `Paid` record, before the CALL that pays the wei (O11).
 
 ## 8. Host and target
 
@@ -316,6 +326,20 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   identity, because R and `mu` read identities. The caller identity is the
   registry image of the caller address; a caller without an identity
   reverts.
+- O11. The remainder of `withdraw` (L6). RULED 2026-10-09 (USER): a
+  `withdraw` that pays 1 wei or more moves r = `NUM[h] mod S` to the
+  treasury dust (DUST, slot 8, units of `1/S` wei). Then
+  `RESERVE[rent] += DUST / S` (checked, a wrap reverts) and
+  DUST := `DUST mod S`. A `withdraw` that pays 0 wei keeps `NUM[h]` and
+  moves no dust. This ruling changes R2 (2026-10-07) for the remainder
+  only: S is fixed at genesis, and transfer conserves it. A successful
+  `withdraw` logs `Paid(uint256 indexed h, address indexed wallet,
+  uint256 paid, uint256 dust)` before the CALL, also at paid = 0. There
+  is no `dust()` view, and `distribute` stays open to all callers. The
+  settlement cases `accrual-debreu-withdraw-recycle`,
+  `accrual-debreu-withdraw-recycle-wrap` and
+  `accrual-debreu-withdraw-kept-dust` and the claims law calls
+  `law-dust-recycle-*` pin this ruling.
 
 ## 10. Milestones
 

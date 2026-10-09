@@ -46,10 +46,12 @@ reverts; its cases went from 60 to 125.
 The I4 slice added `test/claims.py`, a Python reference model of the
 contract with unbounded integers. It runs random operation sequences on the
 model and in geth, and compares the return word and the storage after each
-step. Law vectors check conservation, the sum to inflow, transfer then
+step. Law vectors check conservation, the sum to inflow, the solvency (slice
+L6), transfer then
 distribute against distribute on the image, that amend moves neither the
 measure nor the treasury, that the impossibility reverts leave the state
-unchanged, and that the R rejections revert.
+unchanged, that the R rejections revert, and that the dust goes to the
+rent reserve (slice L6).
 
 The I5 slice added `examples/erc721-dirac.lang`, an ERC-721 token as a
 Dirac measure (S = 1) under a veto charter rule. `test/check.sh` checks it,
@@ -113,6 +115,24 @@ records since the deploy is mu: sequences 20, steps 500, laws 99,
 contract 73. The gas of each successful transfer went up by E_t = 1787,
 of each successful recover by E_r = 1787, and of each deploy by
 E_g = 1777 for each genesis record.
+
+The L6 slice moved the remainder of `withdraw` to the treasury dust (SPEC
+O11). A `withdraw` that pays 1 wei or more moves NUM mod S to DUST (slot
+8), the whole wei of DUST go to `RESERVE[rent]`, and `withdraw` logs
+`Paid(h, wallet, paid, dust)`, also at paid = 0. `test/settlement.py` has
+3 new cases (recycle, recycle-wrap and kept-dust) and the `Paid` records
+of the successful withdraw cases; its cases went to 191 (deploy 5).
+`test/claims.py` models DUST and the `Paid` record, and the fold reads
+only the `Transfer` records. After each step the laws hold with DUST and
+the recycled wei, and the solvency law S x balance = the claims + DUST +
+S x (R0 + R1) holds on the geth state. The contract check of `withdraw`
+runs at DUST 0 and S - 1, and the law vector `dust-recycle` moves 1 wei
+of dust to the rent reserve and distributes it by mass: sequences 20,
+steps 500, laws 100, contract 87. The gas of each successful `withdraw`
+and of each deploy with code went up; no gas line went down. Two mutants
+make the gate fail: the recycle to the sale reserve
+(`accrual-debreu-withdraw-recycle` fails first), and the `Transfer`
+signature in `paid_log` (`accrual-debreu-withdraw-floor` fails first).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

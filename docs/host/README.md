@@ -159,6 +159,7 @@ Storage (mappings live at keccak(key . slot)):
 | 5 | INDEX | the sum of the distributed wei |
 | 6 | CHECKPOINT | identity to INDEX at its last settle |
 | 7 | NUM | identity to its claim numerator, in units of 1/S wei |
+| 8 | DUST | the treasury dust, in units of 1/S wei (less than S) |
 
 S, the sum of the genesis units, is a code constant. The code data at
 `LABEL_DATA` holds the R limit words (rows x 4 x 4: charter code - 1, the
@@ -173,7 +174,7 @@ CHECKPOINT[h] := INDEX.
 |---|---|---|---|
 | `deposit` (payable) | both | kind | Kind above 1 reverts. RESERVE[kind] += callvalue (checked). Returns the new reserve. |
 | `distribute` | Arrow-Debreu | kind | S = 0 reverts. d = RESERVE[kind] if the W gate of (CHARTER, kind) is pass, else 0. RESERVE[kind] -= d, INDEX += d (checked). Returns d. |
-| `withdraw` | both | none | S = 0 reverts. Settles id(CALLER). paid = NUM / S, NUM := NUM mod S. All stores occur before a CALL of paid wei to the caller. A failed CALL reverts. Returns paid. |
+| `withdraw` | both | none | S = 0 reverts. Settles id(CALLER). paid = NUM / S and r = NUM mod S. If paid > 0, NUM := 0 and x = DUST + r; else NUM := r and x = DUST. RESERVE[0] += x / S (checked), DUST := x mod S. Logs `Paid`. All stores and the log occur before a CALL of paid wei to the caller. A failed CALL reverts. Returns paid. |
 | `transfer` | Arrow-Debreu | to, q | `to + 1` overflowing the registry encoding reverts. q >= R[CHARTER][PROFILE h][PROFILE to] reverts. q > MU[h] reverts. Settles h, then to. MU[h] -= q, then MU[to] += q. Returns 1. |
 | `attest` | both | w, h, p | The caller must be an issuer of the active charter. w >= 2^160 or p > 3 reverts. REGISTRY[w] := h + 1 (checked), PROFILE[h] := p. Returns 1. |
 | `cast` | Arrow-Debreu | n ballots | Returns the charter code of the ballots. Writes nothing. |
@@ -188,7 +189,11 @@ CHECKPOINT[h] := INDEX.
 Events: a successful `transfer` or `recover` logs `Transfer(from, to, q)`
 (LOG3; topic 0 = keccak256("Transfer(address,address,uint256)"), the
 identities in topics 1 and 2, q in the data). The creation code logs
-`Transfer(0, h, MU[h])` for each identity with units.
+`Transfer(0, h, MU[h])` for each identity with units. A successful
+`withdraw` logs `Paid(h, wallet, paid, dust)` (LOG3; topic 0 =
+keccak256("Paid(uint256,address,uint256,uint256)"), h and the calling
+wallet in topics 1 and 2, paid and the moved dust in the data), also at
+paid = 0.
 
 Genesis: CHARTER := the start charter (1 with no program data). Each
 genesis row writes REGISTRY[wallet] := identity + 1. Each identity gets MU
@@ -197,8 +202,10 @@ words are not written. Repeated wallets are refused with `CONTRACT_GENESIS`;
 distinct wallets may share an identity, with their units accumulated.
 
 Limits of the domain (not of the core): `distribute` and `withdraw` are
-open to all callers. The remainder NUM mod S stays with the identity, so a
-part of a wei can stay in the contract. `withdraw` sends to the calling
+open to all callers. A `withdraw` that pays 1 wei or more moves the
+remainder NUM mod S to DUST, and the whole wei of DUST go to the rent
+reserve, so less than 1 wei stays in DUST. A `withdraw` that pays 0 wei
+keeps the remainder for the identity. `withdraw` sends to the calling
 wallet, and the identity can have more than one wallet.
 
 ## Refusals

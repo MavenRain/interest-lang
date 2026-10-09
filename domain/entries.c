@@ -7,10 +7,10 @@
  * wallet -> identity + 1, 0 = no identity), PROFILE (slot 2, identity ->
  * profile code 0 .. 3), CHARTER (slot 3, the active charter code 1 .. K),
  * RESERVE (slot 4, kind code 0 rent, 1 sale -> wei), INDEX (slot 5),
- * CHECKPOINT (slot 6, identity -> INDEX at the last settle) and NUM (slot 7,
- * identity -> numerator in units of 1/S wei). S, the sum of the genesis
- * units, is a code constant. A mapping entry lives at keccak256(key . slot),
- * as in Solidity.
+ * CHECKPOINT (slot 6, identity -> INDEX at the last settle), NUM (slot 7,
+ * identity -> numerator in units of 1/S wei) and DUST (slot 8, the treasury
+ * dust in units of 1/S wei, L6). S, the sum of the genesis units, is a code
+ * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
  *
  * Code data at LABEL_DATA: the R limit words, rows x 4 x 4 (charter code - 1,
  * profile of the sender, profile of the receiver; "admits q" = q < L), then
@@ -25,7 +25,8 @@
 
 enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
-  SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7
+  SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
+  SLOT_DUST = 8
 };
 
 enum { MEM_ID = 0x80, MEM_CHARTER = 0xa0 };
@@ -235,27 +236,84 @@ static void distribute(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-/* withdraw: S = 0 reverts; h = id(CALLER); settle h; paid = NUM[h] / S;
- * NUM[h] := NUM[h] mod S; then (all stores done) a CALL of paid wei to
- * CALLER, which reverts the entry when it fails; returns paid. */
+/* h moved paid -> (nothing): LOG3 Paid(h, CALLER, paid, moved), the event
+ * of withdraw (L6), with paid at memory 0 and moved at memory 32. topic0 is
+ * keccak256("Paid(uint256,address,uint256,uint256)"). It is above withdraw,
+ * because C must have the definition before the call. */
+static void paid_log(Asm *a) {
+  static const char event[] = "Paid(uint256,address,uint256,uint256)";
+  unsigned char topic[WORD];
+  lang_keccak256((const unsigned char *)event, sizeof event - 1, topic);
+  asm_store(a, 0);
+  asm_store(a, WORD);
+  asm_op(a, OP_CALLER);
+  asm_op(a, OP_SWAP1);
+  asm_push_word(a, topic);
+  asm_push(a, 2 * WORD);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_LOG3);
+}
+
+/* withdraw: S = 0 reverts; h = id(CALLER); settle h; paid = NUM[h] / S and
+ * r = NUM[h] mod S. When paid is 1 wei or more, moved = r, else moved = 0
+ * (L6). NUM[h] := r - moved; x = DUST + moved; RESERVE[0] += x / S
+ * (checked, a wrap reverts); DUST := x mod S; LOG3 Paid(h, CALLER, paid,
+ * moved). Then (all stores done) a CALL of paid wei to CALLER, which reverts
+ * the entry when it fails; returns paid. */
 static void withdraw(Asm *a, const EntryContext *c) {
   supply_guard(a, c);
   caller_identity(a);
   asm_op(a, OP_DUP1);
   settle(a);
+  asm_op(a, OP_DUP1);
   asm_slot(a, SLOT_NUM);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
   push_supply(a, c);
   asm_op(a, OP_DUP2);
   asm_op(a, OP_MOD);
-  asm_op(a, OP_DUP3);
-  asm_op(a, OP_SSTORE);
+  asm_op(a, OP_SWAP1);
   push_supply(a, c);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_DIV);
-  asm_store(a, MEM_ID);
+  /* h slot r paid -> h moved paid, moved = r * (paid != 0), NUM[h] := r - moved */
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_ISZERO);
+  asm_op(a, OP_ISZERO);
+  asm_op(a, OP_DUP3);
+  asm_op(a, OP_MUL);
+  asm_op(a, OP_SWAP2);
+  asm_op(a, OP_DUP3);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SUB);
+  asm_op(a, OP_DUP4);
+  asm_op(a, OP_SSTORE);
+  asm_op(a, OP_SWAP2);
   asm_op(a, OP_POP);
+  asm_op(a, OP_SWAP1);
+  /* x = DUST + moved; RESERVE[0] += x / S (checked); DUST := x mod S */
+  asm_op(a, OP_DUP2);
+  asm_push(a, SLOT_DUST);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_ADD);
+  asm_op(a, OP_PUSH0);
+  asm_slot(a, SLOT_RESERVE);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  push_supply(a, c);
+  asm_op(a, OP_DUP4);
+  asm_op(a, OP_DIV);
+  asm_checked_add(a);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
+  push_supply(a, c);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_MOD);
+  asm_push(a, SLOT_DUST);
+  asm_op(a, OP_SSTORE);
+  asm_op(a, OP_DUP1);
+  asm_store(a, MEM_ID);
+  paid_log(a);
   asm_op(a, OP_PUSH0);
   asm_op(a, OP_PUSH0);
   asm_op(a, OP_PUSH0);

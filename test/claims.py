@@ -7,12 +7,13 @@ balance) and gives each entry its SPEC meaning. The program tables are written h
 the example sources, and a cross-check compares them with `interestc data`. Each
 operation sequence runs in geth `evm run`, one call per step on the post-state of the
 step before, and each step must equal the model. After each step the SPEC M2 laws hold
-on the geth state: conservation, sum to inflow, and the charter changes only at amend.
+on the geth state: conservation, sum to inflow, solvency, and the charter changes only at amend.
 Then law vectors (transfer then distribute equals distribute on the image, amend moves
 neither mu nor the treasury, recover moves mu but no claim and not the treasury,
 impossibility reverts leave the state unchanged, R
-rejections revert) and the contract half of the refusal list (no mint, burn, balanceOf,
-allowance, charter-write or issuer-write selector; withdraw keeps num mod S). Uses the
+rejections revert, the dust of two withdraws goes to the rent reserve) and the contract
+half of the refusal list (no mint, burn, balanceOf, allowance, charter-write or
+issuer-write selector; a withdraw that pays moves num mod S to the dust). Uses the
 harness of settlement.py."""
 import dataclasses
 import functools
@@ -23,7 +24,7 @@ import subprocess
 import sys
 
 import settlement as st
-from settlement import (CHARTER, CHECKPOINT, INDEX, MU, NUM, PROFILE, REGISTRY, RESERVE,
+from settlement import (CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY, RESERVE,
                         SENDER, data, require, run, slot, vector_index, wallet)
 
 WORD = 2**256
@@ -103,6 +104,7 @@ class State:
     checkpoint: dict
     num: dict
     balance: int
+    dust: int = 0
 
 
 def genesis(program):
@@ -116,7 +118,7 @@ def genesis(program):
 
 def storage(s):
     """The storage words of state S (zero words left out)."""
-    words = {CHARTER: s.charter, INDEX: s.index,
+    words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust,
              **{slot(MU, h): u for h, u in s.mu.items()},
              **{slot(REGISTRY, w): v for w, v in s.registry.items()},
              **{slot(PROFILE, h): p for h, p in s.profile.items()},
@@ -171,14 +173,20 @@ def distribute(program, s, sender, value, kind):
 
 
 def withdraw(program, s, sender, value):
-    """Pays floor(num h / S) wei and keeps num h mod S (R2); the wei must be there."""
+    """Pays floor(num h / S) wei; the wei must be there. A withdraw that pays 1 wei or more
+    moves num h mod S to the dust, and the whole wei of the dust go to the rent reserve (a
+    wrap reverts); a withdraw that pays 0 wei keeps num h mod S (O11)."""
     h = identity(s, sender)
     settled = None if program.supply == 0 or h is None else settle(s, h)
     if settled is None:
         return None
     paid, kept = divmod(settled.num[h], program.supply)
-    return None if paid > settled.balance else (
-        dataclasses.replace(settled, num={**settled.num, h: kept}, balance=settled.balance - paid), paid)
+    moved = kept if paid else 0
+    whole, dust = divmod(settled.dust + moved, program.supply)
+    rent = settled.reserve[0] + whole
+    return None if paid > settled.balance or rent >= WORD else (
+        dataclasses.replace(settled, num={**settled.num, h: kept - moved}, dust=dust,
+                            reserve=put(settled.reserve, 0, rent), balance=settled.balance - paid), paid)
 
 
 def transfer(program, s, sender, value, to, q):
@@ -270,7 +278,7 @@ def check_step(label, program, runtime, s, chain, call):
     wanted = dict(status='revert' if model is None else 'success',
                   output='' if model is None else f'{result:064x}',
                   storage=storage(after), receiver=after.balance,
-                  sender=BASE + s.balance - after.balance, logs=records(s, call, model))
+                  sender=BASE + s.balance - after.balance, logs=records(program, s, call, model))
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
                receiver=actual['balances'].get(st.RECEIVER, 0),
                sender=actual['balances'].get(call[2], 0), logs=actual['logs'])
@@ -278,22 +286,30 @@ def check_step(label, program, runtime, s, chain, call):
     return after, (actual['storage'], got['receiver'])
 
 
-def records(s, call, model):
-    """The Transfer records of CALL from S (O5a): a successful transfer logs (h, to, q) and a
-    successful recover logs (from, to, q); a revert or any other entry logs none."""
+def records(program, s, call, model):
+    """The records of CALL from S: a successful transfer logs Transfer(h, to, q) and a
+    successful recover logs Transfer(from, to, q) (O5a); a successful withdraw logs
+    Paid(h, wallet, paid, moved) (O11); a revert or any other entry logs none."""
     name, args, sender, value = call
     moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q))
-    return [st.transfer_log(*moves[name](*args))] if model and name in moves else []
+    if model and name in moves:
+        return [st.transfer_log(*moves[name](*args))]
+    if model and name == 'withdraw':
+        h = identity(s, sender)
+        paid, kept = divmod(settle(s, h).num[h], program.supply)
+        return [st.paid_log(h, int(sender, 16), paid, kept if paid else 0)]
+    return []
 
 
 def fold(measure, logs, minted=False):
-    """MEASURE after the Transfer records LOGS: each record debits its source and credits its
-    target by its value; a genesis record (MINTED) only credits its target."""
+    """MEASURE after the Transfer records of LOGS (the Paid records are left out): each record
+    debits its source and credits its target by its value; a genesis record (MINTED) only
+    credits its target."""
     def step(mu, record):
         source, target, q = (int(word, 16) for word in (*record[1][1:], record[2]))
         debited = mu if minted else {**mu, source: mu.get(source, 0) - q}
         return {**debited, target: debited.get(target, 0) + q}
-    return functools.reduce(step, logs, measure)
+    return functools.reduce(step, [record for record in logs if record[1][0] == st.topic0()], measure)
 
 
 SENDERS = tuple(map(wallet, (4096, 4096, 4096, 4097, 4097, 4098, 4098, 4099, 4100))) + (SENDER,)
@@ -338,20 +354,21 @@ def sequence(program, runtime, seed, length, args):
     call the fold of the Transfer records since the deploy is mu; at the end balanceOf(h) = mass h."""
     rng, s, seen = random.Random(seed), genesis(program), set()
     measure = fold({}, [st.transfer_log(0, h, u) for h, u in st.data_logs(program.path)], minted=True)
-    chain, deposits, paid = (storage(s), 0), 0, 0
+    chain, deposits, paid, recycled = (storage(s), 0), 0, 0, 0
     for number in range(length):
         label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args)
         model = apply(program, s, call)
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
         deposits += call[3] if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
-        charter, logs = chain[0].get(CHARTER), records(s, call, model)
+        recycled += model[0].reserve[0] - s.reserve[0] if model and call[0] == 'withdraw' else 0
+        charter, logs = chain[0].get(CHARTER), records(program, s, call, model)
         s, chain = check_step(label, program, runtime, s, chain, call)
         measure = fold(measure, logs)
         require({h: u for h, u in measure.items() if u} == {h: u for h, u in s.mu.items() if u},
                 f'{label}: the fold of the Transfer records {measure} != mu {s.mu}')
-        require(laws_hold(program, *chain, deposits, paid),
-                f'{label} {call}: conservation or sum to inflow fails on the geth state')
+        require(laws_hold(program, *chain, deposits, paid, recycled),
+                f'{label} {call}: conservation, sum to inflow or solvency fails on the geth state')
         require(chain[0].get(CHARTER) == charter or call[0] == 'amend', f'{label}: {call[0]} wrote the charter')
         require(program.supply != 1 or [v for v in s.mu.values() if v] == [1], f'{label}: the measure is not a Dirac measure')
     for h in IDENTITIES:
@@ -367,15 +384,19 @@ def geth_claims(words):
             for h in IDENTITIES}
 
 
-def laws_hold(program, words, balance, deposits, paid):
-    """Conservation: the masses sum to S. Sum to inflow: the claims and S * paid sum to
-    S * INDEX (each distribute adds S * d), the deposits are the reserves and INDEX, and
-    the wei balance is the deposits less the paid wei."""
-    supply, index = program.supply, words.get(INDEX, 0)
+def laws_hold(program, words, balance, deposits, paid, recycled):
+    """Conservation: the masses sum to S. Sum to inflow: the claims, DUST, S * paid and
+    S * recycled sum to S * INDEX (each distribute adds S * d; RECYCLED is the wei that
+    withdraw moved from DUST to RESERVE[0]), the deposits and RECYCLED are the reserves and
+    INDEX, and the wei balance is the deposits less the paid wei. Solvency, from the geth
+    state only: S * balance is the claims, DUST and S * the reserves (O11)."""
+    supply, index, dust = program.supply, words.get(INDEX, 0), words.get(DUST, 0)
     mass = sum(words.get(slot(MU, h), 0) for h in IDENTITIES)
     reserves = words.get(slot(RESERVE, 0), 0) + words.get(slot(RESERVE, 1), 0)
-    return (mass == supply and sum(geth_claims(words).values()) + supply * paid == supply * index
-            and deposits == reserves + index and balance == deposits - paid)
+    claims = sum(geth_claims(words).values())
+    return (mass == supply and claims + dust + supply * (paid + recycled) == supply * index
+            and deposits + recycled == reserves + index and balance == deposits - paid
+            and supply * balance == claims + dust + supply * reserves)
 
 
 def play(program, s, calls):
@@ -489,16 +510,38 @@ def r_rejections(program, runtime):
     return count
 
 
-def withdraw_keeps_remainder(program, runtime):
-    """withdraw pays claim / S and keeps claim mod S as NUM, with CHECKPOINT := INDEX."""
+def dust_recycle(program, runtime):
+    """Charter open, 17 wei distributed: two identities withdraw, and each moves its remainder
+    to DUST. When DUST reaches S, its whole wei go to RESERVE[0] (R0 rises by 1). Then
+    distribute(0) pays that wei by mass. The laws hold on the geth state after each step."""
+    one, two = wallet(4096), wallet(4097)
+    s = play(program, dataclasses.replace(genesis(program), charter=1),
+             [('deposit', (0,), SENDER, 17), ('distribute', (0,), SENDER, 0)])
+    chain, recycled = at(s), 0
+    for number, call in enumerate((('withdraw', (), one, 0), ('withdraw', (), two, 0), ('distribute', (0,), SENDER, 0))):
+        after, chain = check_step(f'law-dust-recycle-{number}', program, runtime, s, chain, call)
+        recycled += after.reserve[0] - s.reserve[0] if call[0] == 'withdraw' else 0
+        require(laws_hold(program, *chain, 17, 17 - after.balance, recycled), f'law-dust-recycle-{number}: a law fails')
+        s = after
+    require(recycled == 1 and s.dust == 0 and s.index == 18 and claim(s, 1) == claim(s, 2) == 5,
+            f'law-dust-recycle: recycled {recycled}, dust {s.dust}, claims {claim(s, 1)} {claim(s, 2)}')
+    return 1
+
+
+def withdraw_moves_dust(program, runtime):
+    """withdraw pays claim / S, with CHECKPOINT := INDEX. When it pays 1 wei or more, it moves
+    claim mod S to DUST, and the whole wei of DUST go to RESERVE[0]; else NUM keeps claim mod S."""
     count, supply = 0, program.supply
-    for n, (index, mark) in itertools.product((0, 1, 9, 10, 11, 29, 99), ((0, 0), (3, 1))):
-        s = dataclasses.replace(genesis(program), num={1: n}, index=index, checkpoint={1: mark}, balance=100)
-        words, balance = check_step(f'contract-withdraw-{n}-{index}', program, runtime, s, at(s),
+    for n, (index, mark), dust in itertools.product((0, 1, 9, 10, 11, 29, 99), ((0, 0), (3, 1)), (0, supply - 1)):
+        s = dataclasses.replace(genesis(program), num={1: n}, index=index, checkpoint={1: mark}, balance=100, dust=dust)
+        words, balance = check_step(f'contract-withdraw-{n}-{index}-{dust}', program, runtime, s, at(s),
                                     ('withdraw', (), wallet(4096), 0))[1]
-        c = n + s.mu[1] * (index - mark)
-        require(words.get(slot(NUM, 1), 0) == c % supply and balance == 100 - c // supply
-                and words.get(slot(CHECKPOINT, 1), 0) == index, f'contract-withdraw {n} {index}: num mod S is not kept')
+        paid, kept = divmod(n + s.mu[1] * (index - mark), supply)
+        moved = kept if paid else 0
+        whole, rest = divmod(dust + moved, supply)
+        require(words.get(slot(NUM, 1), 0) == kept - moved and words.get(DUST, 0) == rest
+                and words.get(slot(RESERVE, 0), 0) == whole and balance == 100 - paid
+                and words.get(slot(CHECKPOINT, 1), 0) == index, f'contract-withdraw {n} {index} {dust}: the dust does not move')
         count += 1
     return count
 
@@ -604,8 +647,8 @@ def main():
     debreu, impossible, erc721 = built['debreu'], built['impossibility'], built['erc721']
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
-            + r_rejections(*debreu) + dirac_vectors(*erc721))
-    contract = (withdraw_keeps_remainder(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
+            + r_rejections(*debreu) + dust_recycle(*debreu) + dirac_vectors(*erc721))
+    contract = (withdraw_moves_dust(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))
     print(f'CLAIMS sequences={sequences} steps={steps} laws={laws} contract={contract} geth=model OK'
