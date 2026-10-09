@@ -334,7 +334,7 @@ static unsigned entry_words(const Entry *e, unsigned members) {
  * body of each entry, in list order. */
 static int runtime_entries(Asm *a, LangRegime regime, const EntryContext *c, FILE *err) {
   size_t count = 0;
-  const Entry *list = lang_domain_entries(regime, &count);
+  const Entry *list = lang_domain_entries(regime, c, &count);
   if (list == NULL || count < 1 || count > EVM_ENTRIES)
     return fail(err, "EVM_INTERNAL", "the domain lists %zu entries for regime %d, need 1 to %d",
                 count, (int)regime, EVM_ENTRIES);
@@ -540,6 +540,9 @@ static void creation(Asm *a, const Asm *body, const LangContract *contract) {
   asm_bind(a, LABEL_RUNTIME);
   for (size_t i = 0; i < body->size; i++)
     asm_put(a, body->code[i]);
+  /* The end of the creation code, with no byte: a constructor word of the
+   * domain starts here. */
+  asm_bind(a, LABEL_END);
 }
 
 static int finish(Asm *a, FILE *err) {

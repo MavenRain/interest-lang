@@ -105,6 +105,20 @@ that alias the source file, including hard links and symlinks
     initializers of the entries stay valid, because C sets the missing last
     field to NULL.
 
+## ERC-20 carrier (slice O5b)
+
+11. Status 2026-10-09: not in lang-template. Slice O5b adds
+    `OP_ADDRESS = 0x30`, `OP_CODESIZE = 0x38`, `OP_EXTCODESIZE = 0x3b`,
+    `OP_RETURNDATASIZE = 0x3d` and `OP_STATICCALL = 0xfa` to `Op`
+    (`src/asm.h`). The core label `LABEL_END` (`src/asm.h`, before
+    `LABEL_FREE`) is the end of the creation code. `creation()`
+    (`src/evm.c`) binds it after the runtime bytes and writes no byte, so
+    the domain can read a constructor word after the init code. The hook
+    `lang_domain_entries` gets the parameter `const EntryContext *c`
+    (`src/asm.h`, `src/evm.c`), so the domain can select an entry table
+    from the program data; the stub in `test/evm-boundaries.c` follows.
+    `lang_data` (`src/check.c`) reads the optional def `asset`.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit

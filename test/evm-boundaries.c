@@ -10,8 +10,9 @@ static void constant(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-const Entry *lang_domain_entries(LangRegime regime, size_t *count) {
+const Entry *lang_domain_entries(LangRegime regime, const EntryContext *c, size_t *count) {
   (void)regime;
+  (void)c;
   *count = 1;
   return &fixture;
 }

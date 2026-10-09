@@ -1,6 +1,7 @@
 /* The program data of interestc (SPEC section 7, I3 plan MY CALLs 11-12):
- * the start charter, the genesis rows and the charter tables, read from the
- * optional program defs start, genesis, restrict, waterfall and issuers.
+ * the start charter, the genesis rows, the charter tables and the asset,
+ * read from the optional program defs start, genesis, restrict, waterfall,
+ * issuers and asset.
  * src/evm.h declares LangDomainData, and the domain defines it here (host
  * README, The domain). lang_data (src/check.c) reads it, and the hooks
  * lang_domain_read and lang_domain_print (domain/entries.c) give it to the
@@ -16,6 +17,8 @@ typedef struct {
   unsigned profile;            /* 2 (juris - 1) + (status - 1), 0 .. 3 */
 } LangHolder;
 typedef struct { unsigned charter; unsigned long long identity; } LangIssuer;
+/* The asset of the contract (SPEC section 7, O5b). */
+typedef enum { LANG_ASSET_WEI, LANG_ASSET_TOKEN } LangAsset;
 struct LangDomainData {
   unsigned start;              /* the active charter at genesis, 1 .. charters */
   unsigned charters;           /* K, the constructors of Charter */
@@ -25,9 +28,10 @@ struct LangDomainData {
   unsigned char pass[LANG_DECISIONS_MAX][LANG_KINDS];            /* W: 1 pass, 0 retain */
   size_t issuers;
   LangIssuer issuer[LANG_DECISIONS_MAX * LANG_GENESIS_MAX];
+  LangAsset asset;             /* the def asset; absent: wei */
 };
 /* The reader of lang_domain_read: the optional program defs start, genesis,
- * restrict, waterfall and issuers, read by name and exact type over the
+ * restrict, waterfall, issuers and asset, read by name and exact type over the
  * finite tables above; the defaults when a def is absent. Errors:
  * CONTRACT_TYPE, CONTRACT_VALUE, CONTRACT_GENESIS. */
 int lang_data(LangChecked *checked, LangDomainData *data);

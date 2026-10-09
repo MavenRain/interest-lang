@@ -342,6 +342,13 @@ mu Gate : Type 0 :=
   | pass : Gate
   | retain : Gate
 
+-- SPEC section 7: the asset of the contract, the optional program def
+-- `asset`. `wei` (the default) is native wei; `token` is the ERC-20
+-- carrier at the constructor word (O5b).
+mu AssetMode : Type 0 :=
+  | wei : AssetMode
+  | token : AssetMode
+
 def Waterfall : Type 0 := Kind -> Gate
 
 mu Cap : Type 0 :=

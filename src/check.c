@@ -1687,6 +1687,9 @@ int lang_data(LangChecked *c, LangDomainData *data) {
   Value *start = data_def(c, "start", ctype);
   if (start != NULL)
     data->start = data_code(c, start, charter, "start");
+  Value *asset = data_def(c, "asset", data_type(c, "AssetMode"));
+  if (asset != NULL)
+    data->asset = data_code(c, asset, find_global(c, "AssetMode"), "asset") == 2 ? LANG_ASSET_TOKEN : LANG_ASSET_WEI;
   Value *genesis = data_def(c, "genesis", data_type(c, "Holders"));
   if (genesis != NULL)
     data_genesis(c, genesis, data);

@@ -8,8 +8,10 @@
  * profile code 0 .. 3), CHARTER (slot 3, the active charter code 1 .. K),
  * RESERVE (slot 4, kind code 0 rent, 1 sale -> wei), INDEX (slot 5),
  * CHECKPOINT (slot 6, identity -> INDEX at the last settle), NUM (slot 7,
- * identity -> numerator in units of 1/S wei) and DUST (slot 8, the treasury
- * dust in units of 1/S wei, L6). S, the sum of the genesis units, is a code
+ * identity -> numerator in units of 1/S wei), DUST (slot 8, the treasury
+ * dust in units of 1/S wei, L6) and CARRIER (slot 9, the ERC-20 carrier
+ * address, token mode only, O5b). In token mode, each amount in wei is an
+ * amount in carrier units. S, the sum of the genesis units, is a code
  * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
  *
  * Code data at LABEL_DATA: the R limit words, rows x 4 x 4 (charter code - 1,
@@ -26,10 +28,13 @@
 enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
-  SLOT_DUST = 8
+  SLOT_DUST = 8, SLOT_CARRIER = 9
 };
 
-enum { MEM_ID = 0x80, MEM_CHARTER = 0xa0 };
+/* MEM_CALL: the calldata of a carrier call, the selector at MEM_CALL and
+ * word j at MEM_CALL + 4 + 32 j. The selector store also writes zero to
+ * 0xc4 .. 0xdf, which no entry uses; MEM_ID and MEM_CHARTER stay clear. */
+enum { MEM_ID = 0x80, MEM_CHARTER = 0xa0, MEM_CALL = 0xe0 };
 
 enum { WORD = 32, LIMITS = LANG_PROFILES * LANG_PROFILES };
 
@@ -181,20 +186,144 @@ static void settle(Asm *a) {
   asm_op(a, OP_SSTORE);
 }
 
-/* deposit kind: RESERVE[kind] += CALLVALUE (checked); returns the reserve. */
-static void deposit(Asm *a, const EntryContext *c) {
-  (void)c;
+/* (nothing) -> (nothing): the selector of the carrier function SIG, the
+ * first 4 bytes of keccak256(SIG), at MEM_CALL, as the last 4 bytes of a
+ * zero word at MEM_CALL - 28. */
+static void carrier_selector(Asm *a, const char *sig) {
+  unsigned char hash[WORD];
+  lang_keccak256((const unsigned char *)sig, strlen(sig), hash);
+  unsigned char word[WORD] = {0};
+  memcpy(word + WORD - 4, hash, 4);
+  asm_push_word(a, word);
+  asm_store(a, MEM_CALL - (WORD - 4));
+}
+
+/* (nothing) -> the carrier address (CARRIER, slot 9). */
+static void carrier(Asm *a) {
+  asm_push(a, SLOT_CARRIER);
+  asm_op(a, OP_SLOAD);
+}
+
+/* (nothing) -> balanceOf(this) of the carrier, by STATICCALL. A failed call,
+ * or return data of less than 32 bytes, reverts the entry. */
+static void carrier_balance(Asm *a) {
+  carrier_selector(a, "balanceOf(address)");
+  asm_op(a, OP_ADDRESS);
+  asm_store(a, MEM_CALL + 4);
+  asm_push(a, WORD);
+  asm_op(a, OP_PUSH0);
+  asm_push(a, 4 + WORD);
+  asm_push(a, MEM_CALL);
+  carrier(a);
+  asm_op(a, OP_GAS);
+  asm_op(a, OP_STATICCALL);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, WORD - 1);
+  asm_op(a, OP_RETURNDATASIZE);
+  asm_op(a, OP_GT);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MLOAD);
+}
+
+/* (nothing) -> (nothing): a CALL of the carrier, no value, with the selector
+ * and WORDS words at MEM_CALL. The SafeERC20 rule (MY CALL 148): the entry
+ * reverts unless the call succeeds and the return data is empty, or is 32
+ * bytes or more with the first word 1. The two conditions are exclusive, so
+ * ADD gives their OR. */
+static void token_call(Asm *a, unsigned words) {
+  asm_push(a, WORD);
+  asm_op(a, OP_PUSH0);
+  asm_push(a, 4 + WORD * words);
+  asm_push(a, MEM_CALL);
+  asm_op(a, OP_PUSH0);
+  carrier(a);
+  asm_op(a, OP_GAS);
+  asm_op(a, OP_CALL);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_op(a, OP_RETURNDATASIZE);
+  asm_op(a, OP_ISZERO);
+  asm_push(a, WORD - 1);
+  asm_op(a, OP_RETURNDATASIZE);
+  asm_op(a, OP_GT);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MLOAD);
+  asm_push(a, 1);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_AND);
+  asm_op(a, OP_ADD);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+}
+
+/* (nothing) -> (nothing): the pull of a (word 1) for deposit in token mode
+ * (MY CALL 147). b0 = balanceOf(this); transferFrom(CALLER, this, a) by
+ * token_call; b1 = balanceOf(this). The entry reverts unless b1 = b0 + a
+ * exactly (b0 + a is checked). Thus a fee-on-transfer carrier reverts, and
+ * so does a call back into deposit or withdraw that changes the balance. */
+static void carrier_pull(Asm *a) {
+  carrier_balance(a);
+  asm_argument(a, 1);
+  asm_checked_add(a);
+  carrier_selector(a, "transferFrom(address,address,uint256)");
+  asm_op(a, OP_CALLER);
+  asm_store(a, MEM_CALL + 4);
+  asm_op(a, OP_ADDRESS);
+  asm_store(a, MEM_CALL + 4 + WORD);
+  asm_argument(a, 1);
+  asm_store(a, MEM_CALL + 4 + 2 * WORD);
+  token_call(a, 3);
+  carrier_balance(a);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+}
+
+/* (nothing) -> the deposit amount: CALLVALUE (wei), or a, word 1 (token). */
+static void deposit_amount(Asm *a, LangAsset asset) {
+  switch (asset) {
+    case LANG_ASSET_WEI:
+      asm_op(a, OP_CALLVALUE);
+      return;
+    case LANG_ASSET_TOKEN:
+      asm_argument(a, 1);
+      return;
+  }
+}
+
+/* The body of deposit (wei) and deposit_token: in token mode, first the
+ * pull of a; then RESERVE[kind] += the amount (checked); returns the
+ * reserve. One body for the two modes. */
+static void deposit_body(Asm *a, LangAsset asset) {
   kind_guard(a, 0);
+  if (asset == LANG_ASSET_TOKEN)
+    carrier_pull(a);
   asm_argument(a, 0);
   asm_slot(a, SLOT_RESERVE);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
-  asm_op(a, OP_CALLVALUE);
+  deposit_amount(a, asset);
   asm_checked_add(a);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SWAP2);
   asm_op(a, OP_SSTORE);
   asm_return_top(a);
+}
+
+/* deposit kind: RESERVE[kind] += CALLVALUE (checked); returns the reserve. */
+static void deposit(Asm *a, const EntryContext *c) {
+  (void)c;
+  deposit_body(a, LANG_ASSET_WEI);
+}
+
+/* deposit kind a (token mode, O5b; not payable): the pull of a, then
+ * RESERVE[kind] += a (checked); returns the reserve. */
+static void deposit_token(Asm *a, const EntryContext *c) {
+  (void)c;
+  deposit_body(a, LANG_ASSET_TOKEN);
 }
 
 /* distribute kind: S = 0 reverts; d = W[CHARTER][kind] ? RESERVE[kind] : 0
@@ -254,13 +383,48 @@ static void paid_log(Asm *a) {
   asm_op(a, OP_LOG3);
 }
 
+/* (nothing) -> (nothing): pays paid (memory MEM_ID) to CALLER. Wei: a CALL
+ * of paid wei, which reverts the entry when it fails. Token (MY CALL 149):
+ * when paid is 1 or more, transfer(CALLER, paid) by token_call; at paid = 0
+ * there is no carrier call. */
+static void pay(Asm *a, LangAsset asset) {
+  switch (asset) {
+    case LANG_ASSET_WEI:
+      asm_op(a, OP_PUSH0);
+      asm_op(a, OP_PUSH0);
+      asm_op(a, OP_PUSH0);
+      asm_op(a, OP_PUSH0);
+      asm_load(a, MEM_ID);
+      asm_op(a, OP_CALLER);
+      asm_op(a, OP_GAS);
+      asm_op(a, OP_CALL);
+      asm_op(a, OP_ISZERO);
+      asm_revert_if(a);
+      return;
+    case LANG_ASSET_TOKEN: {
+      Label done = asm_label(a);
+      asm_load(a, MEM_ID);
+      asm_op(a, OP_ISZERO);
+      asm_jump_if(a, done);
+      carrier_selector(a, "transfer(address,uint256)");
+      asm_op(a, OP_CALLER);
+      asm_store(a, MEM_CALL + 4);
+      asm_load(a, MEM_ID);
+      asm_store(a, MEM_CALL + 4 + WORD);
+      token_call(a, 2);
+      asm_jumpdest(a, done);
+      return;
+    }
+  }
+}
+
 /* withdraw: S = 0 reverts; h = id(CALLER); settle h; paid = NUM[h] / S and
  * r = NUM[h] mod S. When paid is 1 wei or more, moved = r, else moved = 0
  * (L6). NUM[h] := r - moved; x = DUST + moved; RESERVE[0] += x / S
  * (checked, a wrap reverts); DUST := x mod S; LOG3 Paid(h, CALLER, paid,
- * moved). Then (all stores done) a CALL of paid wei to CALLER, which reverts
- * the entry when it fails; returns paid. */
-static void withdraw(Asm *a, const EntryContext *c) {
+ * moved). Then (all stores done) pay gives paid to CALLER, a failed payment
+ * reverts the entry; returns paid. One body for withdraw and withdraw_token. */
+static void withdraw_body(Asm *a, const EntryContext *c, LangAsset asset) {
   supply_guard(a, c);
   caller_identity(a);
   asm_op(a, OP_DUP1);
@@ -314,18 +478,19 @@ static void withdraw(Asm *a, const EntryContext *c) {
   asm_op(a, OP_DUP1);
   asm_store(a, MEM_ID);
   paid_log(a);
-  asm_op(a, OP_PUSH0);
-  asm_op(a, OP_PUSH0);
-  asm_op(a, OP_PUSH0);
-  asm_op(a, OP_PUSH0);
-  asm_load(a, MEM_ID);
-  asm_op(a, OP_CALLER);
-  asm_op(a, OP_GAS);
-  asm_op(a, OP_CALL);
-  asm_op(a, OP_ISZERO);
-  asm_revert_if(a);
+  pay(a, asset);
   asm_load(a, MEM_ID);
   asm_return_top(a);
+}
+
+/* withdraw (wei): the CALL of paid wei. */
+static void withdraw(Asm *a, const EntryContext *c) {
+  withdraw_body(a, c, LANG_ASSET_WEI);
+}
+
+/* withdraw (token mode, O5b): transfer(CALLER, paid) when paid >= 1. */
+static void withdraw_token(Asm *a, const EntryContext *c) {
+  withdraw_body(a, c, LANG_ASSET_TOKEN);
 }
 
 /* to from value -> (nothing): LOG3 Transfer(from, to, value), the ERC-20
@@ -607,14 +772,53 @@ static const Entry debreu[] = {
   {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
 };
 
-const Entry *lang_domain_entries(LangRegime regime, size_t *count) {
+/* Token mode (O5b): the same rows, but deposit takes kind and a (not
+ * payable) and withdraw pays by the carrier. */
+static const Entry impossibility_token[] = {
+  {"deposit", 2, 0, ENTRY_NONPAYABLE, deposit_token, NULL},
+  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw_token, NULL},
+  {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
+  {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
+  {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
+  {"charter", 0, 0, ENTRY_NONPAYABLE, charter, NULL},
+  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve, NULL},
+  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_impossibility, NULL},
+  {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
+  {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+};
+
+static const Entry debreu_token[] = {
+  {"deposit", 2, 0, ENTRY_NONPAYABLE, deposit_token, NULL},
+  {"distribute", 1, 0, ENTRY_NONPAYABLE, distribute, NULL},
+  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw_token, NULL},
+  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer, NULL},
+  {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
+  {"recover", 3, 0, ENTRY_NONPAYABLE, recover, NULL},
+  {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast, NULL},
+  {"amend", 0, 1, ENTRY_NONPAYABLE, amend, NULL},
+  {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
+  {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
+  {"charter", 0, 0, ENTRY_NONPAYABLE, charter, NULL},
+  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve, NULL},
+  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu, NULL},
+  {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
+  {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+};
+
+/* The table of REGIME: the token table when the program data selects the
+ * token asset (O5b), else the wei table. */
+const Entry *lang_domain_entries(LangRegime regime, const EntryContext *c, size_t *count) {
+  int token = c != NULL && c->data != NULL && c->data->asset == LANG_ASSET_TOKEN;
   switch (regime) {
     case LANG_REGIME_IMPOSSIBILITY:
-      *count = sizeof impossibility / sizeof impossibility[0];
-      return impossibility;
+      *count = token ? sizeof impossibility_token / sizeof impossibility_token[0]
+                     : sizeof impossibility / sizeof impossibility[0];
+      return token ? impossibility_token : impossibility;
     case LANG_REGIME_DEBREU:
-      *count = sizeof debreu / sizeof debreu[0];
-      return debreu;
+      *count = token ? sizeof debreu_token / sizeof debreu_token[0] : sizeof debreu / sizeof debreu[0];
+      return token ? debreu_token : debreu;
   }
   *count = 0;
   return NULL;
@@ -644,12 +848,48 @@ static void genesis_log(Asm *a, unsigned long long identity, unsigned long long 
   transfer_log(a);
 }
 
-/* The genesis writes: CHARTER := start; per row REGISTRY[w] := h + 1; per
+/* Token mode (MY CALL 146): the constructor word, the last 32 bytes of the
+ * init code, is the carrier address. A missing or extra word, the word 0, a
+ * bit above bit 159, or an address with no code reverts the creation;
+ * CARRIER := the word. */
+static void carrier_genesis(Asm *a) {
+  asm_push(a, WORD);
+  asm_push_label(a, LABEL_END);
+  asm_op(a, OP_ADD);
+  asm_op(a, OP_CODESIZE);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, WORD);
+  asm_push_label(a, LABEL_END);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_CODECOPY);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MLOAD);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_op(a, OP_DUP1);
+  asm_push(a, 160);
+  asm_op(a, OP_SHR);
+  asm_revert_if(a);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_EXTCODESIZE);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, SLOT_CARRIER);
+  asm_op(a, OP_SSTORE);
+}
+
+/* The genesis writes: in token mode first CARRIER := the constructor word
+ * (carrier_genesis); CHARTER := start; per row REGISTRY[w] := h + 1; per
  * distinct identity h, MU[h] := the sum of its units and PROFILE[h] := the
  * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a).
  * Zero words are not written. */
 void lang_domain_genesis(Asm *a, const LangContract *contract) {
   const LangDomainData *data = contract->data;
+  if (data != NULL && data->asset == LANG_ASSET_TOKEN)
+    carrier_genesis(a);
   asm_push(a, data == NULL ? 1u : data->start);
   asm_push(a, SLOT_CHARTER);
   asm_op(a, OP_SSTORE);
@@ -718,7 +958,8 @@ static const char *cap_text(LangCap cap, char *buf, size_t size) {
 
 /* The `data` verb: start, charters, genesis rows w:h:p:u, restrict (one
  * group of 16 caps per charter, profile pairs row-major), waterfall (one
- * group per charter: p pass, r retain, for rent then sale), issuers c:h.
+ * group per charter: p pass, r retain, for rent then sale), issuers c:h,
+ * then `asset token` in token mode only (no line for wei, MY CALL 155).
  * DATA is not NULL (lang_domain_read). */
 void lang_domain_print(const LangDomainData *data, FILE *out) {
   fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
@@ -738,4 +979,6 @@ void lang_domain_print(const LangDomainData *data, FILE *out) {
   for (size_t i = 0; i < data->issuers; i++)
     fprintf(out, " %u:%llu", data->issuer[i].charter, data->issuer[i].identity);
   fputc('\n', out);
+  if (data->asset == LANG_ASSET_TOKEN)
+    fputs("asset token\n", out);
 }
