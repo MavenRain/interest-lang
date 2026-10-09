@@ -21,9 +21,9 @@
 enum {
   EVM_ENTRIES = 16,         /* entries of one regime */
   EVM_RUNTIME_MAX = 24576,  /* EIP-170 */
-  EVM_PACK_BITS = 256,      /* amend packs ceil(log2(k + 1)) bits per tally into one word */
-  EVM_TABLE_MAX = 4096,     /* bytes of the verdict table */
-  EVM_SIGNATURE = 256
+  EVM_PACK_BITS = 256,      /* lang_entry_amend packs ceil(log2(k + 1)) bits per tally into one word, when they fit */
+  EVM_TABLE_MAX = 4096,     /* bytes of the verdict table; it sets the member bound (members_max) */
+  EVM_SIGNATURE = 512       /* bytes of the text name(uint256,...) of one entry, with its NUL */
 };
 
 static int fail(FILE *err, const char *code, const char *format, ...) {
@@ -36,9 +36,14 @@ static int fail(FILE *err, const char *code, const char *format, ...) {
   return 1;
 }
 
+/* Records the first overflow of A: WHY when OVER. Nonzero when A is full. */
+static int overflow(Asm *a, int over, AsmFull why) {
+  a->full = a->full == ASM_ROOM && over ? why : a->full;
+  return a->full != ASM_ROOM;
+}
+
 void asm_put(Asm *a, unsigned value) {
-  a->full = a->full || a->size >= EVM_CAPACITY;
-  if (a->full)
+  if (overflow(a, a->size >= EVM_CAPACITY, ASM_FULL_CODE))
     return;
   a->code[a->size] = (unsigned char)value;
   a->size++;
@@ -64,8 +69,7 @@ void asm_push(Asm *a, unsigned long value) {
 }
 
 void asm_push_label(Asm *a, Label label) {
-  a->full = a->full || a->sites >= EVM_FIXUPS;
-  if (a->full)
+  if (overflow(a, a->sites >= EVM_FIXUPS, ASM_FULL_FIXUPS))
     return;
   asm_op(a, OP_PUSH2);
   a->site[a->sites] = a->size;
@@ -106,7 +110,7 @@ Label asm_label(Asm *a) {
 }
 
 static int resolve(Asm *a) {
-  int ok = !a->full;
+  int ok = a->full == ASM_ROOM;
   for (size_t i = 0; ok && i < a->sites; i++) {
     Label label = a->target[i];
     ok = a->bound[label] && a->at[label] <= 0xffff;
@@ -164,7 +168,9 @@ void asm_store(Asm *a, unsigned address) {
 
 static int signature(char *text, const char *name, unsigned words) {
   size_t size = strlen(name);
-  int ok = size + 2 + 8ul * words < EVM_SIGNATURE;
+  /* Parentheses and NUL, with one fewer comma when arguments are present. */
+  size_t suffix = words == 0 ? 3 : 2;
+  int ok = size <= EVM_SIGNATURE - suffix && words <= (EVM_SIGNATURE - suffix - size) / 8;
   if (!ok)
     return 0;
   memcpy(text, name, size);
@@ -183,8 +189,7 @@ static int signature(char *text, const char *name, unsigned words) {
 static void dispatch(Asm *a, const char *name, unsigned words, Label label) {
   char text[EVM_SIGNATURE];
   unsigned char digest[32] = {0};
-  a->full = a->full || !signature(text, name, words);
-  if (a->full)
+  if (overflow(a, !signature(text, name, words), ASM_FULL_SIGNATURE))
     return;
   lang_keccak256((const unsigned char *)text, strlen(text), digest);
   asm_op(a, OP_DUP1);
@@ -301,8 +306,15 @@ void lang_entry_cast(Asm *a, const EntryContext *c) {
 }
 
 /* amend at the canonical Phi: the packed table sum C_i * 2^(bits i), bits =
- * ceil(log2(k + 1)) (host CAPABILITY.md, Output; k = 3: C_i * 4^i). */
+ * ceil(log2(k + 1)) (host CAPABILITY.md, Output; k = 3: C_i * 4^i). When the
+ * codes do not fit one word (packed NULL), amend reverts with no output. */
 void lang_entry_amend(Asm *a, const EntryContext *c) {
+  if (c->packed == NULL) {
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_REVERT);
+    return;
+  }
   asm_push_word(a, c->packed);
   asm_return_top(a);
 }
@@ -370,21 +382,21 @@ static unsigned code_bits(unsigned k) {
   return bits;
 }
 
-/* The most members whose tallies amend packs into one word (k = 3: 14). */
-static unsigned members_max(unsigned k) {
-  unsigned bits = code_bits(k);
-  unsigned n = 0;
-  while (lang_tally_count(k, n + 1, EVM_PACK_BITS) * bits <= EVM_PACK_BITS)
-    n++;
-  return n;
-}
-
 /* n (n + 1)^(k - 2) + 1, the table bytes; EVM_TABLE_MAX + 1 when larger. */
 static size_t table_bytes(unsigned n, unsigned k) {
   size_t bytes = n;
   for (unsigned j = 2; j < k && bytes <= EVM_TABLE_MAX; j++)
     bytes *= n + 1ul;
   return bytes >= EVM_TABLE_MAX ? EVM_TABLE_MAX + 1ul : bytes + 1;
+}
+
+/* The most members whose verdict table fits EVM_TABLE_MAX bytes (k = 3: 63,
+ * k = 4: 15). */
+static unsigned members_max(unsigned k) {
+  unsigned n = 0;
+  while (table_bytes(n + 1, k) <= EVM_TABLE_MAX)
+    n++;
+  return n;
 }
 
 /* The sum of counts[j] (n + 1)^j over j < k - 1. */
@@ -406,24 +418,32 @@ static void code_list(char *text, size_t size, unsigned k) {
   }
 }
 
+/* The amend word (Alternative A): the code of tally i at bits bits i ..
+ * bits i + bits - 1, when the codes of all the tallies fit one word. Else
+ * NULL, and lang_entry_amend reverts. */
+static const unsigned char *amend_word(const LangContract *contract, unsigned char packed[32]) {
+  unsigned bits = code_bits(contract->decisions);
+  int fits = contract->count * bits <= EVM_PACK_BITS;
+  for (size_t i = 0; fits && i < contract->count; i++) {
+    for (unsigned t = 0; t < bits; t++) {
+      size_t at = (size_t)bits * i + t;
+      packed[31 - at / 8] |= (unsigned char)(((contract->codes[i] >> t) & 1u) << (at % 8));
+    }
+  }
+  return fits ? packed : NULL;
+}
+
 static int runtime_debreu(Asm *a, const LangContract *contract, FILE *err) {
   unsigned n = contract->members;
   unsigned k = contract->decisions;
-  unsigned bits = code_bits(k);
   unsigned char table[EVM_TABLE_MAX] = {0};
   unsigned char packed[32] = {0};
   unsigned counts[LANG_DECISIONS_MAX] = {0};
   counts[k - 1] = n;
   size_t i = 0;
-  for (int more = 1; more; more = lang_tally_next(counts, k, n), i++) {
-    unsigned code = contract->codes[i];
-    table[table_index(counts, n, k)] = (unsigned char)code;
-    for (unsigned t = 0; t < bits; t++) {
-      size_t at = (size_t)bits * i + t;
-      packed[31 - at / 8] |= (unsigned char)(((code >> t) & 1u) << (at % 8));
-    }
-  }
-  EntryContext context = {n, k, packed, contract->data};
+  for (int more = 1; more; more = lang_tally_next(counts, k, n), i++)
+    table[table_index(counts, n, k)] = (unsigned char)contract->codes[i];
+  EntryContext context = {n, k, amend_word(contract, packed), contract->data};
   int bad = runtime_entries(a, LANG_REGIME_DEBREU, &context, err);
   if (bad)
     return bad;
@@ -454,7 +474,7 @@ static int check_debreu(const LangContract *contract, FILE *err) {
   unsigned most = members_max(k);
   if (n < 1 || n > most)
     return fail(err, "EVM_LIMIT", "the Debreu regime needs 1 to %u members, got %u", most, n);
-  size_t wanted = lang_tally_count(k, n, EVM_PACK_BITS);
+  size_t wanted = lang_tally_count(k, n, EVM_TABLE_MAX);
   if (contract->codes == NULL || contract->count != wanted)
     return fail(err, "EVM_TABLE", "%zu decision codes needed for %u members, got %zu",
                 wanted, n, contract->codes == NULL ? (size_t)0 : contract->count);
@@ -518,8 +538,17 @@ static void creation(Asm *a, const Asm *body, const LangContract *contract) {
 static int finish(Asm *a, FILE *err) {
   if (a->labels_full)
     return fail(err, "EVM_INTERNAL", "more than %d jump labels", EVM_LABELS);
-  if (a->full)
-    return fail(err, "EVM_SIZE", "the bytecode exceeds %d bytes", EVM_CAPACITY);
+  switch (a->full) {
+    case ASM_ROOM:
+      break;
+    case ASM_FULL_CODE:
+      return fail(err, "EVM_SIZE", "the bytecode exceeds %d bytes", EVM_CAPACITY);
+    case ASM_FULL_FIXUPS:
+      return fail(err, "EVM_SIZE", "the bytecode has more than %d jump label sites", EVM_FIXUPS);
+    case ASM_FULL_SIGNATURE:
+      return fail(err, "EVM_SIZE", "an entry signature name(uint256,...) needs more than %d bytes",
+                  EVM_SIGNATURE);
+  }
   if (!resolve(a))
     return fail(err, "EVM_INTERNAL", "unresolved jump label");
   return 0;
@@ -559,4 +588,20 @@ int lang_evm_write(const LangContract *contract, LangPart part, FILE *out, FILE 
       return bad ? bad : write_hex(&creation_asm, out, err);
   }
   return fail(err, "EVM_USAGE", "unknown part %d", (int)part);
+}
+
+int lang_evm_amend(const LangContract *contract, FILE *out, FILE *err) {
+  if (contract == NULL || contract->regime != LANG_REGIME_DEBREU)
+    return fail(err, "EVM_USAGE", "amend needs a Debreu contract");
+  int bad = check_debreu(contract, err);
+  if (bad)
+    return bad;
+  Asm body;
+  memset(&body, 0, sizeof body);
+  unsigned char packed[32] = {0};
+  EntryContext context = {contract->members, contract->decisions, amend_word(contract, packed),
+                          contract->data};
+  lang_entry_amend(&body, &context);
+  bad = finish(&body, err);
+  return bad ? bad : write_hex(&body, out, err);
 }

@@ -14,6 +14,7 @@ step sh test/parse.sh
 step sh test/embed-safety.sh
 step sh test/check.sh
 step sh test/build-output.sh
+step build/evm-boundaries
 step sh test/refusal.sh
 step python3 test/normal-forms.py
 step python3 test/differential.py

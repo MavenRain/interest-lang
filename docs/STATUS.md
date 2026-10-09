@@ -45,9 +45,11 @@ milestone of SPEC section 10 is open.
 
 ## Known limits
 
-- Arrow-Debreu takes at most 14 members at k = 3 and 6 members at k = 4.
-  Cause: `amend` packs the code of each tally in one 256-bit word
-  (`EVM_LIMIT`).
+- Arrow-Debreu takes at most 63 members at k = 3 and 15 members at k = 4.
+  Cause: the verdict table has at most 4096 bytes (`EVM_LIMIT`). The core
+  entry `lang_entry_amend` packs the code of each tally in one 256-bit
+  word, and reverts when the codes do not fit one word (more than 14
+  members at k = 3).
 - The plurality rule at 1000 members fills the 256 MiB arena (`MEMORY`)
   before `TABLE_LIMIT`. Cause: a run has one arena, and `table` evaluates
   the rule at each of the 501501 tallies (`probe/CAPABILITY.md`, section 6).

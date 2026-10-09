@@ -7,14 +7,14 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
 `make check` passes after the staged-change review fixes. It builds `build/interestc`,
-`build/parsetool` and the three test-domain compilers with tcc, compiles the
+`build/parsetool`, `build/evm-boundaries` and the three test-domain compilers with tcc, compiles the
 sources and the test tools with the C compiler as a second check
 (`check-clang`), and runs `test/gate.sh`. The gate runs these steps: parse 28 round trips,
-embed-safety, check 52 cases, build output 27 checks, refusal
+embed-safety, check 52 cases, build output 27 checks, EVM signature boundaries 4 checks, refusal
 49 cases, normal forms 10, the
 differential test (27 vectors at k = 3), domain tests 11, the differential
-test of the k = 4 domain (64 vectors), settlement 140 cases with 4 deploys
-and a gas ceiling on their 141 EVM calls (`test/gas-baseline.txt`),
+test of the k = 4 domain (64 vectors), settlement 175 cases with 5 deploys
+and a gas ceiling on their 175 EVM calls (`test/gas-baseline.txt`),
 and claims (20 sequences totaling 500 steps, 99 law calls, 70 contract checks).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
@@ -92,3 +92,19 @@ A call that uses less gas prints a `GAS note` line, and the gate stays green.
 `python3 test/settlement.py --write-gas` writes the file again. The value is
 the execution gas: geth `evm run` does not charge the intrinsic gas of a
 transaction. The claims calls have no gas check.
+
+The L1 slice moved the members limit of Arrow-Debreu from the amend word
+to the verdict table of at most 4096 bytes (k = 3: 63 members, k = 4: 15
+members). It added 35 settlement cases: 32 cast and amend calls at k = 3
+n = 15 and 63 and at k = 4 n = 7 and 15, one more refusal row above the
+limit, and 2 checks of the `lang_entry_amend` body (`evmtool amend`:
+k = 3 n = 14 gives the packed word, n = 15 gives the revert). The 34 new
+lines of `test/gas-baseline.txt` are the 32 calls and the 2 deploy calls
+at k = 3 n = 63. Thus the file has 175 calls (165 cases and 10 deploy
+calls).
+
+`test/evm-boundaries.c` exercises the public writer with a small domain. It
+accepts signatures needing exactly 512 bytes including the NUL and refuses
+513-byte signatures with `EVM_SIZE` and no output. Both an empty argument
+list and 63 ballot arguments are covered. The 63-argument `settle` entry
+failed before the review fix because the size check rejected an exact fit.

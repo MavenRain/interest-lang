@@ -19,6 +19,9 @@ typedef struct {
 } LangContract;
 /* Writes lowercase hex, no 0x, one trailing newline. Returns 0, or nonzero after writing "interestc: EVM_<CODE>: message\n" to err. */
 int lang_evm_write(const LangContract *contract, LangPart part, FILE *out, FILE *err);
+/* The body of lang_entry_amend for a Debreu contract, written as lang_evm_write
+ * writes code (test/evmtool.c amend: the test pin of the amend word). */
+int lang_evm_amend(const LangContract *contract, FILE *out, FILE *err);
 /* C(n+k-1, k-1), the tallies of n ballots over k codes; LIMIT + 1 when it is larger than LIMIT. */
 size_t lang_tally_count(unsigned k, unsigned n, size_t limit);
 /* The tally order: COUNTS has k parts that sum to n, first (0, .., 0, n).

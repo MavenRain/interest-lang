@@ -102,7 +102,7 @@ The core writes the dispatcher, then for each entry a head (callvalue
 guard unless payable, calldata size check), then calls `emit`. An unknown
 selector reverts. `emit` gets an `EntryContext`: `members` (n), `decisions`
 (k, or 0 in Arrow-impossibility), `packed` (the amend word, Arrow-Debreu
-only) and `data` (the program data, below). The core entries `lang_entry_cast` and `lang_entry_amend` can go in
+only; NULL when the codes do not fit one word) and `data` (the program data, below). The core entries `lang_entry_cast` and `lang_entry_amend` can go in
 a list. The `asm_*` helpers of `src/asm.h` write opcodes, pushes, labels
 (64 for each contract), jumps, calldata words, mapping slots
 (keccak(key . slot)), checked addition, memory words, an address guard and
@@ -206,7 +206,7 @@ wallet, and the identity can have more than one wallet.
 | `TABLE_DECISION`, `TABLE_STUCK`, `TABLE_LIMIT` | D is not a valid decision space, the rule does not reduce at a tally, or too many members or tallies |
 | `VERDICT_TYPE`, `VERDICT_LIMIT` | `NAME` is not a ChoiceRule, or k^n is more than 59049 |
 | `CONTRACT_TYPE`, `CONTRACT_VALUE`, `CONTRACT_GENESIS` | A program-data definition has the wrong type or value, or the genesis list is invalid (including a repeated wallet) |
-| `EVM_LIMIT`, `EVM_TABLE`, `EVM_SIZE` | Too many members for the amend word, a bad verdict table, or the code is too large |
+| `EVM_LIMIT`, `EVM_TABLE`, `EVM_SIZE` | Too many members for the verdict table, a bad verdict table, or too much code, too many jump label sites or a too long entry signature |
 | `EVM_INTERNAL`, `EVM_USAGE`, `EVM_IO` | A writer fault, a bad writer call, or an output error |
 | `MEMORY`, `IO_READ`, `IO_SIZE`, `IO_WRITE`, `USAGE`, `TYPE_INTERNAL` | Arena full, file errors, bad arguments, checker fault |
 
@@ -242,9 +242,10 @@ scan for en and em dashes. It ends with `gate: 0 failures`.
 | Tallies for `table` | 501501 | `src/check.c:20` |
 | Ballot vectors for `verdicts` | 59049 (3^10) | `src/check.c:18` |
 | Decision values k | 2 to 64 | `src/evm.h:7` |
-| Members for `build` (Arrow-Debreu) | largest n with C(n+k-1, k-1) * ceil(log2(k+1)) <= 256 (k = 3: 14) | `src/evm.c:374` |
-| Verdict table | n(n+1)^(k-2) + 1 bytes, at most 4096 | `src/evm.c:382` |
-| Code buffer, fixups, labels | 8192 bytes, 512, 64 | `src/asm.h:17` |
+| Members for `build` (Arrow-Debreu) | largest n with a verdict table of at most 4096 bytes (k = 3: 63, k = 4: 15) | `src/evm.c:393` |
+| Verdict table | n(n+1)^(k-2) + 1 bytes, at most 4096 | `src/evm.c:384` |
+| Code buffer, fixups, labels | 24576 bytes, 512, 64 | `src/asm.h:17` |
+| Entry signature text | 512 bytes | `src/evm.c:26` |
 | Entries for each regime | 16 | `src/evm.c:22` |
 | Runtime code | 24576 bytes (EIP-170) | `src/evm.c:22` |
 

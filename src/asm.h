@@ -14,7 +14,7 @@
 #include "evm.h"
 
 enum {
-  EVM_CAPACITY = 8192,
+  EVM_CAPACITY = 24576,
   EVM_FIXUPS = 512,
   EVM_LABELS = 64
 };
@@ -39,6 +39,10 @@ enum { LABEL_REVERT, LABEL_TABLE, LABEL_RUNTIME, LABEL_DATA, LABEL_FREE };
 
 typedef enum { ENTRY_PAYABLE, ENTRY_NONPAYABLE } Payment;
 
+/* The first overflow of an Asm: the code buffer, the label sites, or the
+ * text of an entry signature. finish reports each one as EVM_SIZE. */
+typedef enum { ASM_ROOM, ASM_FULL_CODE, ASM_FULL_FIXUPS, ASM_FULL_SIGNATURE } AsmFull;
+
 /* Pass 1 appends code and records each PUSH2 label site; pass 2 (resolve)
  * writes the label offsets into those sites. */
 typedef struct {
@@ -51,7 +55,7 @@ typedef struct {
   size_t sites;
   unsigned labels;   /* labels given by asm_label */
   int labels_full;
-  int full;
+  AsmFull full;      /* ASM_ROOM while the code fits */
 } Asm;
 
 /* What an entry body knows of the contract. */

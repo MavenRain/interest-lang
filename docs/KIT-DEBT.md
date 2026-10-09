@@ -67,6 +67,33 @@ that alias the source file, including hard links and symlinks
    `lang_entry_amend` for a domain whose `amend` writes nothing, or move it
    to the sample domain.
 
+## Members bound and amend word (slice L1)
+
+9. Status 2026-10-09: not in lang-template. Slice L1 lifts known limit 1
+   in the core of this tree (`src/asm.h`, `src/evm.h`, `src/evm.c`) and in
+   `test/evmtool.c`:
+   - `EVM_CAPACITY` is 24576 bytes (it was 8192), the EIP-170 limit of the
+     runtime. `EVM_FIXUPS` stays 512: the runtime at k = 3 n = 63 has 209
+     jump label sites. `EVM_SIGNATURE` (512 bytes) is the limit of the
+     text `name(uint256,...)` of one entry.
+   - `Asm.full` has the type `AsmFull` (`ASM_ROOM`, `ASM_FULL_CODE`,
+     `ASM_FULL_FIXUPS`, `ASM_FULL_SIGNATURE`). The first overflow sets
+     it, and `finish` gives an `EVM_SIZE` text for each reason.
+   - `members_max(k)` is the largest n with a verdict table of at most
+     `EVM_TABLE_MAX` (4096) bytes: 63 at k = 3, 15 at k = 4. The `wanted`
+     tally count uses the limit `EVM_TABLE_MAX`.
+   - `amend_word` fills the `packed` word only when the codes of all the
+     tallies fit 256 bits. Else `packed` is NULL, and `lang_entry_amend`
+     reverts with empty output (`PUSH0 PUSH0 REVERT`).
+   - The new core function `lang_evm_amend` (`src/evm.h`) writes the body
+     of `lang_entry_amend` as hex. `test/evmtool.c` has the argument
+     `-k K`, the verb `amend N debreu CODE...` and `TOOL_CODES` 4096.
+   - The L1 plan had multi-word tally packing in `amend`. The build uses
+     Alternative A instead: `packed` stays one 256-bit word.
+
+   The kit can take these changes by a sync, or keep its bound of 14
+   members at k = 3 and 6 members at k = 4.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit

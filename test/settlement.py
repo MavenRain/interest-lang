@@ -141,12 +141,47 @@ def paid_case(name, code, calldata, before, after, result, *, balance, sender):
     return 1
 
 
-def tally_index(members, release, refund):
-    return sum(members + 1 - r for r in range(release)) + refund
+def tallies(members, k):
+    """The tallies (ballots of 1, .., ballots of k - 1) of MEMBERS ballots in the order of
+    lang_tally_next: part 0 outer, the ballots of k the remainder."""
+    if k == 1:
+        return [()]
+    return [(first, *rest) for first in range(members + 1) for rest in tallies(members - first, k - 1)]
 
 
-def verdict(members, codes, ballots):
-    return codes[tally_index(members, ballots.count(1), ballots.count(2))]
+@functools.cache
+def tally_order(members, k):
+    return {tally: i for i, tally in enumerate(tallies(members, k))}
+
+
+def verdict(members, codes, ballots, k=3):
+    return codes[tally_order(members, k)[tuple(ballots.count(b) for b in range(1, k))]]
+
+
+def l1_case(k, members):
+    """An L1 contract: code i % k + 1 for tally i; five mixed ballot vectors, all 1, all k."""
+    codes = tuple(i % k + 1 for i in range(len(tallies(members, k))))
+    vectors = [tuple((m * j) % k + 1 for m in range(members)) for j in range(1, 6)]
+    return k, members, codes, vectors + [(1,) * members, (k,) * members]
+
+
+def push(word):
+    """asm_push_word: the shortest PUSH of WORD, PUSH0 for zero."""
+    size = (word.bit_length() + 7) // 8
+    return f'{0x5f + size:02x}' + (f'{word:0{2 * size}x}' if size else '')
+
+
+def amend_pins():
+    """The body of lang_entry_amend (`evmtool amend`, Alternative A): at k = 3 n = 14 the
+    120 codes fit one word (code i at bit 2i) and amend returns that word; at n = 15 the
+    136 codes do not fit and amend reverts with no output."""
+    fits = l1_case(3, 14)[2]
+    word = sum(code << (2 * i) for i, code in enumerate(fits))
+    require(bytecode('amend', 14, 'debreu', *fits) == push(word) + '5f5260205ff3',
+            'amend body n14: not the packed word and its return')
+    require(bytecode('amend', 15, 'debreu', *l1_case(3, 15)[2]) == '5f5ffd',
+            'amend body n15: not the revert')
+    return 2
 
 
 def deploy(name, creation, runtime, storage):
@@ -199,7 +234,8 @@ def program_code(name, program):
 
 def refusals():
     rows = [(('runtime', 0, 'debreu', 3), 'EVM_LIMIT'),
-            (('runtime', 15, 'debreu', *([1] * 136)), 'EVM_LIMIT'),
+            (('runtime', 64, 'debreu', *([1] * len(tallies(64, 3)))), 'EVM_LIMIT'),
+            (('-k', 4, 'runtime', 16, 'debreu', *([1] * len(tallies(16, 4)))), 'EVM_LIMIT'),
             (('runtime', 0, 'impossibility'), 'EVM_LIMIT'),
             (('runtime', 3, 'debreu', *CODES[:-1]), 'EVM_TABLE'),
             (('runtime', 3, 'debreu', *CODES[:-1], 4), 'EVM_TABLE'),
@@ -417,21 +453,27 @@ def main(write_gas):
     expect('impossibility-cast', impossible, data('cast', 1, 1, 3), {}, {}, None)
     expect('cast-value', runtime, data('cast', 1, 1, 3), {}, {}, None, value=1)
     cases += 2
-    for members, codes, vectors in (
-            (1, (3, 2, 1), [(1,), (2,), (3,)]),
-            (14, tuple(i % 3 + 1 for i in range(120)),
-             [tuple((m * k) % 3 + 1 for m in range(14)) for k in range(5)] + [(1,) * 14, (2,) * 14])):
-        code = bytecode('runtime', members, 'debreu', *codes)
-        for k, ballots in enumerate(vectors):
-            expect(f'cast-n{members}-{k}', code, data('cast', *ballots), {}, {},
-                   verdict(members, codes, ballots))
+    for k, members, codes, vectors in (
+            (3, 1, (3, 2, 1), [(1,), (2,), (3,)]),
+            (3, 14, tuple(i % 3 + 1 for i in range(120)),
+             [tuple((m * j) % 3 + 1 for m in range(14)) for j in range(5)] + [(1,) * 14, (2,) * 14]),
+            *(l1_case(k, members) for k, members in ((3, 15), (3, 63), (4, 7), (4, 15)))):
+        flags = () if k == 3 else ('-k', k)
+        name = f'n{members}' if k == 3 else f'k{k}-n{members}'
+        code = bytecode(*flags, 'runtime', members, 'debreu', *codes)
+        for j, ballots in enumerate(vectors):
+            expect(f'cast-{name}-{j}', code, data('cast', *ballots), {}, {},
+                   verdict(members, codes, ballots, k))
             cases += 1
-        decision = verdict(members, codes, vectors[0])
-        expect(f'amend-n{members}', code, data('amend', *vectors[0]), {}, {CHARTER: decision}, decision)
+        decision = verdict(members, codes, vectors[0], k)
+        expect(f'amend-{name}', code, data('amend', *vectors[0]), {}, {CHARTER: decision}, decision)
         cases += 1
-    cases += debreu_example_cases() + impossibility_example_cases()
+    _, members, codes, _ = l1_case(3, 63)
+    deploy('debreu-n63-deploy', bytecode('creation', members, 'debreu', *codes),
+           bytecode('runtime', members, 'debreu', *codes), {CHARTER: 1})
+    cases += amend_pins() + debreu_example_cases() + impossibility_example_cases()
     gas = gas_check(write_gas)
-    print(f'SETTLEMENT cases={cases} deploy=4 geth=expected OK (logs: {WORK})')
+    print(f'SETTLEMENT cases={cases} deploy=5 geth=expected OK (logs: {WORK})')
     print(gas)
 
 
