@@ -30,6 +30,9 @@ BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
 DEBREU = ROOT / 'examples/arrow-debreu.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
+SIGNATURES = {'balanceOf': 'balanceOf(address)'}
+TRANSFER = 'Transfer(address,address,uint256)'
+LOGS = '#### LOGS ####'
 
 
 def require(ok, message):
@@ -63,13 +66,13 @@ def slot(base, key):
 
 
 @functools.cache
-def selector(name, words):
-    signature = name + '(' + ','.join(['uint256'] * words) + ')'
+def selector(name, words, text=None):
+    signature = text or name + '(' + ','.join(['uint256'] * words) + ')'
     return checked(['cast', 'sig', signature]).strip()[2:]
 
 
 def data(name, *values):
-    return selector(name, len(values)) + ''.join(f'{value:064x}' for value in values)
+    return selector(name, len(values), SIGNATURES.get(name)) + ''.join(f'{value:064x}' for value in values)
 
 
 def objects(text):
@@ -89,6 +92,38 @@ def wallet(number):
     return f'{number:040x}'
 
 
+@functools.cache
+def topic0():
+    return checked(['cast', 'keccak', TRANSFER]).strip()[2:]
+
+
+def transfer_log(source, target, value, address=RECEIVER):
+    """The Transfer(source, target, value) record of the account at ADDRESS."""
+    return (address, (topic0(), f'{source:064x}', f'{target:064x}'), f'{value:064x}')
+
+
+def log_records(text):
+    """The records of the LOGS block that `evm --debug` writes to stderr, in order:
+    (address, topics, data) per LOG. A reverted call has the block and no record."""
+    lines = text.splitlines()
+    require(lines.count(LOGS) <= 1, f'evm --debug: {lines.count(LOGS)} LOGS blocks')
+    tail = lines[lines.index(LOGS) + 1:] if LOGS in lines else []
+    return [log_record(block.splitlines()) for block in '\n'.join(tail).split('\n\n') if block.strip()]
+
+
+def log_record(lines):
+    """`LOGn: <address> bn=0 txi=0`, n topic lines `%08d  <word>`, then the data as a hexdump."""
+    head = lines[0].split()
+    require(len(head) == 4 and head[0][:3] == 'LOG' and head[0][-1] == ':' and head[2:] == ['bn=0', 'txi=0'],
+            f'LOG head {lines[0]!r}')
+    count = int(head[0][3:-1])
+    topics = [line.split() for line in lines[1:1 + count]]
+    require(len(topics) == count and all(len(t) == 2 and len(t[1]) == 64 for t in topics),
+            f'LOG topics {lines!r}')
+    data = ''.join(line.split('|')[0][8:].replace(' ', '') for line in lines[1 + count:])
+    return (head[1].lower().removeprefix('0x'), tuple(t[1] for t in topics), data)
+
+
 def run(name, code, calldata, *, before=None, value=0, create=False, sender=SENDER, balance=0):
     state = dict(GENESIS, alloc={
         sender: dict(balance=hex(10**24)),
@@ -98,9 +133,13 @@ def run(name, code, calldata, *, before=None, value=0, create=False, sender=SEND
     genesis.write_text(json.dumps(state))
     argv = ['evm', '--verbosity', '0', 'run', '--prestate', str(genesis), '--gas', str(GAS),
             '--sender', '0x' + sender, '--receiver', '0x' + RECEIVER, '--code', code,
-            '--input', calldata, '--value', str(value), '--json', '--dump']
-    text = checked(argv + (['--create'] if create else []))
+            '--input', calldata, '--value', str(value), '--json', '--debug', '--dump']
+    result = subprocess.run(argv + (['--create'] if create else []), text=True, capture_output=True,
+                            timeout=60)
+    require(result.returncode == 0, f'{name}: evm exit {result.returncode}: {result.stderr[-400:]}')
+    text = result.stdout
     (WORK / (name + '.out')).write_text(text)
+    (WORK / (name + '.log')).write_text(result.stderr)
     records = objects(text)
     require(len(records) >= 2 and 'accounts' in records[-1], f'{name}: missing state dump')
     errors = [row['error'] for row in records if row.get('error')]
@@ -111,17 +150,19 @@ def run(name, code, calldata, *, before=None, value=0, create=False, sender=SEND
               for key, account in records[-1]['accounts'].items()}
     return dict(status='revert' if errors else 'success',
                 output=records[-2]['output'].lower().removeprefix('0x'),
+                logs=log_records(result.stderr),
                 storage=stores.get(RECEIVER, {}),
                 created={key: value for key, value in stores.items() if value and key != RECEIVER},
                 balances={key.lower().removeprefix('0x'): int(str(account.get('balance', '0')), 0)
                           for key, account in records[-1]['accounts'].items()})
 
 
-def expect(name, code, calldata, before, after, result, *, value=0, sender=SENDER):
+def expect(name, code, calldata, before, after, result, *, value=0, sender=SENDER, logs=()):
     actual = run(name, code, calldata, before=before, value=value, sender=sender)
     wanted = dict(status='revert' if result is None else 'success',
                   output='' if result is None else f'{result:064x}',
-                  storage={k: v for k, v in after.items() if v})
+                  storage={k: v for k, v in after.items() if v},
+                  logs=list(logs))
     got = {key: actual[key] for key in wanted}
     require(got == wanted, f'{name}: EVM {got} != {wanted}')
 
@@ -134,9 +175,9 @@ def paid_case(name, code, calldata, before, after, result, *, balance, sender):
     wanted = dict(status='revert' if result is None else 'success',
                   output='' if result is None else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v},
-                  receiver=balance - paid, sender=10**24 + paid)
+                  receiver=balance - paid, sender=10**24 + paid, logs=[])
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
-               receiver=actual['balances'].get(RECEIVER, 0), sender=actual['balances'].get(sender, 0))
+               receiver=actual['balances'].get(RECEIVER, 0), sender=actual['balances'].get(sender, 0), logs=actual['logs'])
     require(got == wanted, f'{name}: EVM {got} != {wanted}')
     return 1
 
@@ -184,15 +225,18 @@ def amend_pins():
     return 2
 
 
-def deploy(name, creation, runtime, storage):
+def deploy(name, creation, runtime, storage, logs=()):
+    """LOGS: the (identity, units) of each genesis Transfer record, in genesis order."""
     made = run(name, creation, '', create=True)
     require(made['status'] == 'success' and made['output'] == runtime,
             f'{name}: creation did not return the runtime')
     written = list(made['created'].values())
     require(made['storage'] == {} and written == [storage],
             f'{name}: genesis storage {written} != [{storage}]')
+    wanted = [transfer_log(0, h, units, address) for address in made['created'] for h, units in logs]
+    require(made['logs'] == wanted, f'{name}: genesis logs {made["logs"]} != {wanted}')
     paid = run(name + '-value', creation, '', value=1, create=True)
-    require(paid['status'] == 'revert' and paid['output'] == '', f'{name}: creation took a value')
+    require(paid['status'] == 'revert' and paid['output'] == '' and paid['logs'] == [], f'{name}: creation took a value')
 
 
 def genesis_storage(start, rows):
@@ -213,22 +257,36 @@ def interestc(*args, binary=None):
     return result.stdout
 
 
+def data_rows(program, binary=None):
+    """The start and the genesis rows w:h:p:u of the `interestc data PROGRAM` lines."""
+    lines = dict((line + ' ').split(' ', 1) for line in interestc('data', program, binary=binary).splitlines())
+    return int(lines['start']), [tuple(map(int, row.split(':'))) for row in lines['genesis'].split()]
+
+
 def data_storage(program, binary=None):
     """genesis_storage of the `interestc data PROGRAM` lines."""
-    lines = dict((line + ' ').split(' ', 1) for line in interestc('data', program, binary=binary).splitlines())
-    rows = [tuple(map(int, row.split(':'))) for row in lines['genesis'].split()]
-    return genesis_storage(int(lines['start']), rows)
+    return genesis_storage(*data_rows(program, binary))
 
 
-def program_code(name, program):
-    """Deploys the creation code of `interestc build PROGRAM` against its data; -> the runtime."""
+def data_logs(program, binary=None):
+    """The (identity, units) of each genesis Transfer record of PROGRAM: one record for each identity
+    with units, in the order of its first row (lang_domain_genesis)."""
+    rows = data_rows(program, binary)[1]
+    sums = [(h, sum(u for _, k, _, u in rows if k == h)) for h in dict.fromkeys(h for _, h, _, _ in rows)]
+    return [(h, u) for h, u in sums if u]
+
+
+def program_code(name, program, logs=None):
+    """Deploys the creation code of `interestc build PROGRAM` against its data; -> the runtime.
+    LOGS: the genesis records (None: data_logs of PROGRAM)."""
     def part(label, *flags):
         out = WORK / f'{name}-{label}.hex'
         interestc('build', program, *flags, '-o', out)
         return out.read_text().strip()
 
     creation, runtime = part('creation'), part('runtime', '--runtime')
-    deploy(f'{name}-deploy', creation, runtime, data_storage(program))
+    deploy(f'{name}-deploy', creation, runtime, data_storage(program),
+           data_logs(program) if logs is None else logs)
     return runtime
 
 
@@ -252,10 +310,11 @@ def refusals():
 
 
 def table_cases(prefix, runtime, rows):
-    """Each row: label, calldata, before, after (None: before), result (None: revert), value, sender."""
-    for label, calldata, before, after, result, value, sender in rows:
+    """Each row: label, calldata, before, after (None: before), result (None: revert), value, sender, and
+    optionally the LOG records of the call (default: none)."""
+    for label, calldata, before, after, result, value, sender, *logs in rows:
         expect(f'{prefix}-{label}', runtime, calldata, before, before if after is None else after,
-               result, value=value, sender=sender)
+               result, value=value, sender=sender, logs=logs[0] if logs else ())
     return len(rows)
 
 
@@ -274,6 +333,8 @@ def default_cases(runtime, regime, constituting):
             ('distribute', data('distribute', 0), {**before, slot(RESERVE, 0): 4}, None, None, 0, SENDER),
             ('withdraw', data('withdraw'), before, None, None, 0, SENDER),
             ('claim', data('claimOf', 0), {**before, INDEX: 3}, None, 15, 0, SENDER),
+            ('balance', data('balanceOf', 0), before, None, 5, 0, SENDER),
+            ('total-supply', data('totalSupply'), before, None, 0, 0, SENDER),
             ('no-selector', 'aabbcc', before, None, None, 0, SENDER),
             ('unknown', 'ffffffff', before, None, None, 0, SENDER)]
     return table_cases(f'default-{regime}', runtime, rows)
@@ -287,7 +348,7 @@ def debreu_example_cases():
     """B2 entries at the genesis of examples/arrow-debreu.lang: start restricted (upTo 4
     everywhere), open any, frozen deny; identity 1 (wallet 4096, 5 units, profile 0) is
     the issuer at open and restricted; identity 2 (wallets 4097, 4098, 5 units, profile 3)."""
-    runtime = program_code('example-debreu', DEBREU)
+    runtime = program_code('example-debreu', DEBREU, [(1, 5), (2, 5)])
     base = data_storage(DEBREU)
     one, two, three = wallet(4096), wallet(4097), wallet(4098)
     mu1, mu2 = slot(MU, 1), slot(MU, 2)
@@ -298,13 +359,13 @@ def debreu_example_cases():
              {**base, slot(RESERVE, 1): 7}, 7, 4, SENDER),
             ('deposit-kind', data('deposit', 2), base, None, None, 1, one),
             ('deposit-overflow', data('deposit', 0), {**base, slot(RESERVE, 0): 2**256 - 3}, None, None, 5, one),
-            ('transfer-admit', data('transfer', 2, 4), base, {**base, mu1: 1, mu2: 9}, 1, 0, one),
+            ('transfer-admit', data('transfer', 2, 4), base, {**base, mu1: 1, mu2: 9}, 1, 0, one, [transfer_log(1, 2, 4)]),
             ('transfer-limit', data('transfer', 2, 5), base, None, None, 0, one),
             ('transfer-frozen', data('transfer', 2, 1), frozen, None, None, 0, one),
-            ('transfer-open-all', data('transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10}, 1, 0, one),
+            ('transfer-open-all', data('transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
             ('transfer-over-mass', data('transfer', 2, 6), opened, None, None, 0, one),
-            ('transfer-self', data('transfer', 1, 3), base, None, 1, 0, one),
-            ('transfer-second-wallet', data('transfer', 1, 4), base, {**base, mu1: 9, mu2: 1}, 1, 0, three),
+            ('transfer-self', data('transfer', 1, 3), base, None, 1, 0, one, [transfer_log(1, 1, 3)]),
+            ('transfer-second-wallet', data('transfer', 1, 4), base, {**base, mu1: 9, mu2: 1}, 1, 0, three, [transfer_log(2, 1, 4)]),
             ('transfer-no-identity', data('transfer', 2, 1), base, None, None, 0, SENDER),
             ('transfer-value', data('transfer', 2, 1), base, None, None, 1, one),
             ('transfer-short', data('transfer', 2, 1)[:-2], base, None, None, 0, one),
@@ -316,10 +377,10 @@ def debreu_example_cases():
             ('attest-wallet', data('attest', 2**160, 3, 2), base, None, None, 0, one),
             ('attest-profile', data('attest', 4099, 3, 4), base, None, None, 0, one),
             ('attest-identity-wrap', data('attest', 4099, 2**256 - 1, 0), base, None, None, 0, one),
-            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2}, 1, 0, one),
-            ('recover-open', data('recover', 2, 1, 5), opened, {**opened, mu1: 10, mu2: 0}, 1, 0, one),
-            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10}, 1, 0, one),
-            ('recover-self', data('recover', 2, 2, 3), base, None, 1, 0, one),
+            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2}, 1, 0, one, [transfer_log(2, 3, 2)]),
+            ('recover-open', data('recover', 2, 1, 5), opened, {**opened, mu1: 10, mu2: 0}, 1, 0, one, [transfer_log(2, 1, 5)]),
+            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
+            ('recover-self', data('recover', 2, 2, 3), base, None, 1, 0, one, [transfer_log(2, 2, 3)]),
             ('recover-over-mass', data('recover', 2, 3, 6), base, None, None, 0, one),
             ('recover-non-issuer', data('recover', 1, 2, 1), base, None, None, 0, two),
             ('recover-frozen', data('recover', 2, 3, 1), frozen, None, None, 0, one),
@@ -336,6 +397,12 @@ def debreu_example_cases():
             ('reserve-kind', data('reserve', 2), base, None, None, 0, SENDER),
             ('self', data('selfConstituting'), base, None, 1, 0, SENDER),
             ('view-value', data('mass', 1), base, None, None, 1, SENDER),
+            ('balance-1', data('balanceOf', 1), base, None, 5, 0, SENDER),
+            ('balance-none', data('balanceOf', 3), base, None, 0, 0, SENDER),
+            ('balance-wide', data('balanceOf', 2**200), base, None, 0, 0, SENDER),
+            ('total-supply', data('totalSupply'), base, None, 10, 0, SENDER),
+            ('balance-value', data('balanceOf', 1), base, None, None, 1, SENDER),
+            ('transfer-zero', data('transfer', 2, 0), base, None, 1, 0, one, [transfer_log(1, 2, 0)]),
             ('no-selector', 'aabbcc', base, None, None, 0, one),
             ('unknown', 'ffffffff', base, None, None, 0, one)]
     digits = interestc('verdicts', DEBREU, 'F').strip()
@@ -376,7 +443,7 @@ def accrual_cases(runtime, base):
             ('claim-none', data('claimOf', 3), {**base, INDEX: 30}, None, 0, 0, SENDER),
             ('claim-wrap', data('claimOf', 1), {**base, INDEX: 2**255}, None, None, 0, SENDER),
             ('transfer-settles', data('transfer', 2, 4), accrued,
-             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3}, 1, 0, one),
+             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3}, 1, 0, one, [transfer_log(1, 2, 4)]),
             ('transfer-settle-wrap', data('transfer', 2, 4), {**base, INDEX: 2**255}, None, None, 0, one)]
     cases = table_cases('accrual-debreu', runtime, rows)
     for label, before, after, result, balance, sender in (
@@ -396,7 +463,7 @@ def impossibility_example_cases():
     """examples/arrow-impossibility.lang: identity 1 (wallet 4096, 5 units) issues at every
     charter; identity 2 (wallet 4097) holds 0 units; no transfer, recover, cast or amend
     entry."""
-    runtime = program_code('example-impossibility', IMPOSSIBILITY)
+    runtime = program_code('example-impossibility', IMPOSSIBILITY, [(1, 5)])
     base = data_storage(IMPOSSIBILITY)
     one, two = wallet(4096), wallet(4097)
     rows = [('deposit', data('deposit', 0), base, {**base, slot(RESERVE, 0): 3}, 3, 3, one),
@@ -412,7 +479,10 @@ def impossibility_example_cases():
             ('charter', data('charter'), base, None, 1, 0, SENDER),
             ('self', data('selfConstituting'), base, None, 0, 0, SENDER),
             ('distribute', data('distribute', 0), {**base, slot(RESERVE, 0): 3}, None, None, 0, one),
-            ('claim', data('claimOf', 1), {**base, INDEX: 2}, None, 10, 0, SENDER)]
+            ('claim', data('claimOf', 1), {**base, INDEX: 2}, None, 10, 0, SENDER),
+            ('balance-1', data('balanceOf', 1), base, None, 5, 0, SENDER),
+            ('total-supply', data('totalSupply'), base, None, 5, 0, SENDER),
+            ('total-supply-value', data('totalSupply'), base, None, None, 1, SENDER)]
     cases = table_cases('example-impossibility', runtime, rows)
     cases += paid_case('example-impossibility-withdraw', runtime, data('withdraw'), base, base, 0,
                        balance=0, sender=one)

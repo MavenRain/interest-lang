@@ -182,6 +182,13 @@ CHECKPOINT[h] := INDEX.
 | `supply`, `charter` | both | none | S; CHARTER. |
 | `reserve` | both | kind | Kind above 1 reverts. RESERVE[kind]. |
 | `selfConstituting` | both | none | 1 in Arrow-Debreu, 0 in Arrow-impossibility. |
+| `balanceOf` | both | h (ABI type `address`) | MU[h], as `mass` (ERC-20 facade). |
+| `totalSupply` | both | none | S (ERC-20 facade). |
+
+Events: a successful `transfer` or `recover` logs `Transfer(from, to, q)`
+(LOG3; topic 0 = keccak256("Transfer(address,address,uint256)"), the
+identities in topics 1 and 2, q in the data). The creation code logs
+`Transfer(0, h, MU[h])` for each identity with units.
 
 Genesis: CHARTER := the start charter (1 with no program data). Each
 genesis row writes REGISTRY[wallet] := identity + 1. Each identity gets MU

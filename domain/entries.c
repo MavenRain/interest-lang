@@ -20,6 +20,7 @@
  * (src/check.c) reads, and lang_domain_print writes it for the `data` verb. */
 #include "asm.h"
 #include "data.h"
+#include "keccak.h"
 #include <string.h>
 
 enum {
@@ -269,10 +270,25 @@ static void withdraw(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
+/* to from value -> (nothing): LOG3 Transfer(from, to, value), the ERC-20
+ * event (O5a), with the value word at memory 0. topic0 is
+ * keccak256("Transfer(address,address,uint256)"). */
+static void transfer_log(Asm *a) {
+  static const char event[] = "Transfer(address,address,uint256)";
+  unsigned char topic[WORD];
+  lang_keccak256((const unsigned char *)event, sizeof event - 1, topic);
+  asm_store(a, 0);
+  asm_push_word(a, topic);
+  asm_push(a, WORD);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_LOG3);
+}
+
 /* transfer to q: h = id(CALLER); q >= R[CHARTER][PROFILE h][PROFILE to]
  * reverts; q > MU[h] or to + 1 overflow reverts; settle h, then settle to (SPEC 5: checkpoints
  * both identities); MU[h] -= q, then MU[to] += q (read after the debit, so
- * to = h keeps the mass); returns 1. */
+ * to = h keeps the mass); logs Transfer(h, to, q), also at q = 0 and at
+ * to = h (O5a); returns 1. */
 static void transfer(Asm *a, const EntryContext *c) {
   (void)c;
   /* Every destination must admit the registry encoding identity + 1. */
@@ -331,6 +347,10 @@ static void transfer(Asm *a, const EntryContext *c) {
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  asm_argument(a, 1);
+  transfer_log(a);
   asm_push(a, 1);
   asm_return_top(a);
 }
@@ -387,7 +407,8 @@ static void attest(Asm *a, const EntryContext *c) {
 /* recover from to q (ERC-1644 forced transfer, O3): the issuer guard;
  * from + 1 or to + 1 overflow reverts; q > MU[from] reverts; R does not
  * gate it; settle from, then settle to; MU[from] -= q, then MU[to] += q
- * (read after the debit, so to = from keeps the mass); returns 1. */
+ * (read after the debit, so to = from keeps the mass); logs
+ * Transfer(from, to, q) (O5a); returns 1. */
 static void recover(Asm *a, const EntryContext *c) {
   issuer_guard(a, c);
   for (unsigned j = 0; j < 2; j++) {
@@ -423,6 +444,10 @@ static void recover(Asm *a, const EntryContext *c) {
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  asm_argument(a, 2);
+  transfer_log(a);
   asm_push(a, 1);
   asm_return_top(a);
 }
@@ -437,7 +462,7 @@ static void amend(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-/* mass h: MU[h]. */
+/* mass h, and balanceOf(address h) of the ERC-20 facade (O5a): MU[h]. */
 static void mass(Asm *a, const EntryContext *c) {
   (void)c;
   asm_argument(a, 0);
@@ -446,7 +471,7 @@ static void mass(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-/* supply: S, the code constant. */
+/* supply, and totalSupply() of the ERC-20 facade (O5a): S, the code constant. */
 static void supply(Asm *a, const EntryContext *c) {
   push_supply(a, c);
   asm_return_top(a);
@@ -492,32 +517,36 @@ static void self_impossibility(Asm *a, const EntryContext *c) {
 }
 
 static const Entry impossibility[] = {
-  {"deposit", 1, 0, ENTRY_PAYABLE, deposit},
-  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw},
-  {"attest", 3, 0, ENTRY_NONPAYABLE, attest},
-  {"mass", 1, 0, ENTRY_NONPAYABLE, mass},
-  {"supply", 0, 0, ENTRY_NONPAYABLE, supply},
-  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim},
-  {"charter", 0, 0, ENTRY_NONPAYABLE, charter},
-  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve},
-  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_impossibility},
+  {"deposit", 1, 0, ENTRY_PAYABLE, deposit, NULL},
+  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw, NULL},
+  {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
+  {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
+  {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
+  {"charter", 0, 0, ENTRY_NONPAYABLE, charter, NULL},
+  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve, NULL},
+  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_impossibility, NULL},
+  {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
+  {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
 };
 
 static const Entry debreu[] = {
-  {"deposit", 1, 0, ENTRY_PAYABLE, deposit},
-  {"distribute", 1, 0, ENTRY_NONPAYABLE, distribute},
-  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw},
-  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer},
-  {"attest", 3, 0, ENTRY_NONPAYABLE, attest},
-  {"recover", 3, 0, ENTRY_NONPAYABLE, recover},
-  {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast},
-  {"amend", 0, 1, ENTRY_NONPAYABLE, amend},
-  {"mass", 1, 0, ENTRY_NONPAYABLE, mass},
-  {"supply", 0, 0, ENTRY_NONPAYABLE, supply},
-  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim},
-  {"charter", 0, 0, ENTRY_NONPAYABLE, charter},
-  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve},
-  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu},
+  {"deposit", 1, 0, ENTRY_PAYABLE, deposit, NULL},
+  {"distribute", 1, 0, ENTRY_NONPAYABLE, distribute, NULL},
+  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw, NULL},
+  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer, NULL},
+  {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
+  {"recover", 3, 0, ENTRY_NONPAYABLE, recover, NULL},
+  {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast, NULL},
+  {"amend", 0, 1, ENTRY_NONPAYABLE, amend, NULL},
+  {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
+  {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
+  {"charter", 0, 0, ENTRY_NONPAYABLE, charter, NULL},
+  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve, NULL},
+  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu, NULL},
+  {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
+  {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
 };
 
 const Entry *lang_domain_entries(LangRegime regime, size_t *count) {
@@ -546,9 +575,21 @@ static void store_entry(Asm *a, unsigned base, unsigned long long key, unsigned 
   asm_op(a, OP_SSTORE);
 }
 
+/* The genesis event of identity h with units: Transfer(0, h, units) (O5a). */
+static void genesis_log(Asm *a, unsigned long long identity, unsigned long long units) {
+  unsigned char word[WORD];
+  word_of(word, identity, 0);
+  asm_push_word(a, word);
+  asm_op(a, OP_PUSH0);
+  word_of(word, units, 0);
+  asm_push_word(a, word);
+  transfer_log(a);
+}
+
 /* The genesis writes: CHARTER := start; per row REGISTRY[w] := h + 1; per
  * distinct identity h, MU[h] := the sum of its units and PROFILE[h] := the
- * profile of its last row. Zero words are not written. */
+ * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a).
+ * Zero words are not written. */
 void lang_domain_genesis(Asm *a, const LangContract *contract) {
   const LangDomainData *data = contract->data;
   asm_push(a, data == NULL ? 1u : data->start);
@@ -570,8 +611,10 @@ void lang_domain_genesis(Asm *a, const LangContract *contract) {
       units += same ? data->holder[j].units : 0;
       profile = same ? data->holder[j].profile : profile;
     }
-    if (units != 0)
+    if (units != 0) {
       store_entry(a, SLOT_MU, row->identity, units, 0);
+      genesis_log(a, row->identity, units);
+    }
     if (profile != 0)
       store_entry(a, SLOT_PROFILE, row->identity, profile, 0);
   }

@@ -77,8 +77,11 @@ types of section 4, the operations of section 5 and the formers of section
 - a charter change outside `amend`;
 - an issuer change outside a charter;
 - a payout by floor division outside `withdraw`;
-- an ERC storage surface (`balanceOf`, `allowance`);
+- an allowance surface (`allowance`, `approve`, `transferFrom`);
 - document-hash data that changes W or R.
+
+The compiler writes the ERC-20 read facade (section 7). A program cannot add
+to it.
 
 A program that does not check is refused with a `TYPE_`, `LEX_` or `PARSE_`
 code (`docs/host/README.md`, section Refusals). A refusal is one line on
@@ -214,11 +217,19 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `distribute(kind)`, `withdraw()`, `transfer(to, q)`, `attest(w, h, p)`,
   `recover(from, to, q)`, `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
   `claimOf(h)`, `charter()`, `reserve(kind)` and `selfConstituting()` (a
-  constant that the compiler computes). Each argument is a `uint256` word.
+  constant that the compiler computes). The ERC-20 read facade adds the
+  views `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). Each
+  argument is a `uint256` word, but the argument of `balanceOf` has the ABI
+  type `address`; the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
   Ballots are call arguments (escrow-lang shape; no ballot authentication,
   O2). The identity of the caller is the registry image of the caller
   address; `to` is an identity (O10).
+- **Events.** A successful `transfer` and a successful `recover` log one
+  `Transfer(from, to, q)` record (LOG3, the ERC-20 event; `from` and `to`
+  are identities), also at `q = 0` and at `to = from`. The creation code
+  logs `Transfer(0, h, MU[h])` for each genesis identity with units. No
+  other entry logs, and a revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
   guard reverts. A refused transfer (R fails, `q > mass h`, or `to + 1`
@@ -275,7 +286,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   ERC-3643-shaped registry. The ERC-721 shape is an example program with
   `S = 1` (a Dirac measure).
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
-  facade with events.
+  facade with events. O5a (2026-10-09): the read facade and the `Transfer`
+  event. Open: the ERC-20 asset carrier (R3), O5b.
 - O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
   program gives the genesis charter, and it can be any declared charter.
   `examples/arrow-debreu.lang` has `start restricted`, the second declared

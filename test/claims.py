@@ -15,6 +15,7 @@ rejections revert) and the contract half of the refusal list (no mint, burn, bal
 allowance, charter-write or issuer-write selector; withdraw keeps num mod S). Uses the
 harness of settlement.py."""
 import dataclasses
+import functools
 import itertools
 import random
 import re
@@ -28,15 +29,18 @@ from settlement import (CHARTER, CHECKPOINT, INDEX, MU, NUM, PROFILE, REGISTRY, 
 WORD = 2**256
 BASE = 10**24
 WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=3, cast=3, amend=3,
-             mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0)
-VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting')
+             mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0, balanceOf=1, totalSupply=0)
+FACADE = ('balanceOf', 'totalSupply')
+VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting') + FACADE
 IDENTITIES = range(5)
 # Signatures that the contract must not have (SPEC section 2 refusals, I2c MY CALL 8).
 FORBIDDEN = ('mint(address,uint256)', 'mint(uint256,uint256)', 'mint(uint256)', 'burn(uint256)',
-             'burn(address,uint256)', 'balanceOf(address)', 'balanceOf(uint256)',
+             'burn(address,uint256)', 'balanceOf(uint256)',
              'allowance(address,address)', 'allowance(uint256,uint256)', 'approve(address,uint256)',
              'transferFrom(address,address,uint256)', 'setCharter(uint256)',
              'setIssuer(uint256,uint256)', 'addIssuer(uint256)')
+# Signatures that the contract must have in each regime (the ERC-20 read facade, O5a).
+REQUIRED = ('balanceOf(address)', 'totalSupply()')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,13 +78,13 @@ DEBREU = Program(
     'debreu', st.DEBREU, 2, ((4096, 1, 0, 5), (4097, 2, 3, 3), (4098, 2, 3, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
     ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'mass',
-     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting'), 1)
+     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1)
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
     'impossibility', st.IMPOSSIBILITY, 1, ((4096, 1, 0, 5), (4097, 2, 0, 0)),
     (('d',) * 16,) * 3, ('rr',) * 3, ((1, 1), (2, 1), (3, 1)),
     ('deposit', 'withdraw', 'attest', 'mass', 'supply', 'claimOf', 'charter', 'reserve',
-     'selfConstituting'), 0)
+     'selfConstituting', 'balanceOf', 'totalSupply'), 0)
 # examples/erc721-dirac.lang: one unit (S = 1) at identity 1; restricted admits an accredited
 # receiver only (the profile code is 2 juris + status, so the odd codes).
 ERC721 = Program(
@@ -233,7 +237,8 @@ def view(name):
         out = dict(mass=lambda h: s.mu.get(h, 0), supply=lambda: program.supply,
                    claimOf=lambda h: claim(s, h), charter=lambda: s.charter,
                    reserve=lambda kind: s.reserve[kind] if kind < 2 else None,
-                   selfConstituting=lambda: program.constituting)[name](*args)
+                   selfConstituting=lambda: program.constituting,
+                   balanceOf=lambda h: s.mu.get(h, 0), totalSupply=lambda: program.supply)[name](*args)
         return None if out is None else (s, out)
     return result
 
@@ -265,12 +270,30 @@ def check_step(label, program, runtime, s, chain, call):
     wanted = dict(status='revert' if model is None else 'success',
                   output='' if model is None else f'{result:064x}',
                   storage=storage(after), receiver=after.balance,
-                  sender=BASE + s.balance - after.balance)
+                  sender=BASE + s.balance - after.balance, logs=records(s, call, model))
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
                receiver=actual['balances'].get(st.RECEIVER, 0),
-               sender=actual['balances'].get(call[2], 0))
+               sender=actual['balances'].get(call[2], 0), logs=actual['logs'])
     require(got == wanted, f'{label} {call}: geth {got} != model {wanted}')
     return after, (actual['storage'], got['receiver'])
+
+
+def records(s, call, model):
+    """The Transfer records of CALL from S (O5a): a successful transfer logs (h, to, q) and a
+    successful recover logs (from, to, q); a revert or any other entry logs none."""
+    name, args, sender, value = call
+    moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q))
+    return [st.transfer_log(*moves[name](*args))] if model and name in moves else []
+
+
+def fold(measure, logs, minted=False):
+    """MEASURE after the Transfer records LOGS: each record debits its source and credits its
+    target by its value; a genesis record (MINTED) only credits its target."""
+    def step(mu, record):
+        source, target, q = (int(word, 16) for word in (*record[1][1:], record[2]))
+        debited = mu if minted else {**mu, source: mu.get(source, 0) - q}
+        return {**debited, target: debited.get(target, 0) + q}
+    return functools.reduce(step, logs, measure)
 
 
 SENDERS = tuple(map(wallet, (4096, 4096, 4096, 4097, 4097, 4098, 4098, 4099, 4100))) + (SENDER,)
@@ -287,9 +310,12 @@ ARGS = dict(
     claimOf=lambda r: (r.choice((0, 1, 1, 2, 2, 3)),),
     charter=lambda r: (),
     reserve=lambda r: (r.choice((0, 1, 2)),),
-    selfConstituting=lambda r: ())
+    selfConstituting=lambda r: (),
+    balanceOf=lambda r: (r.randrange(0, 5),),
+    totalSupply=lambda r: ())
 CHOICES = ('deposit',) * 4 + ('distribute',) * 3 + ('withdraw',) * 4 + ('transfer',) * 3 + (
-    'attest', 'cast', 'amend', 'claimOf', 'claimOf', *VIEWS)
+    'attest', 'cast', 'amend', 'claimOf', 'claimOf', *VIEWS[:-len(FACADE)])
+# The draws leave out FACADE, so the sequences do not change (O5a); each sequence ends with balanceOf.
 # S = 1: a transfer of quantity 1 moves the whole unit.
 DIRAC_ARGS = dict(ARGS, transfer=lambda r: (r.randrange(0, 5), r.choice((0, 1, 1, 1, 2))))
 
@@ -308,8 +334,10 @@ def random_call(rng, args):
 
 def sequence(program, runtime, seed, length, args):
     """LENGTH random calls from the genesis of PROGRAM; -> the final model state and the
-    successful calls seen (name + '+' for a nonzero result, name + '0' for zero)."""
+    successful calls seen (name + '+' for a nonzero result, name + '0' for zero). After each
+    call the fold of the Transfer records since the deploy is mu; at the end balanceOf(h) = mass h."""
     rng, s, seen = random.Random(seed), genesis(program), set()
+    measure = fold({}, [st.transfer_log(0, h, u) for h, u in st.data_logs(program.path)], minted=True)
     chain, deposits, paid = (storage(s), 0), 0, 0
     for number in range(length):
         label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args)
@@ -317,12 +345,18 @@ def sequence(program, runtime, seed, length, args):
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
         deposits += call[3] if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
-        charter = chain[0].get(CHARTER)
+        charter, logs = chain[0].get(CHARTER), records(s, call, model)
         s, chain = check_step(label, program, runtime, s, chain, call)
+        measure = fold(measure, logs)
+        require({h: u for h, u in measure.items() if u} == {h: u for h, u in s.mu.items() if u},
+                f'{label}: the fold of the Transfer records {measure} != mu {s.mu}')
         require(laws_hold(program, *chain, deposits, paid),
                 f'{label} {call}: conservation or sum to inflow fails on the geth state')
         require(chain[0].get(CHARTER) == charter or call[0] == 'amend', f'{label}: {call[0]} wrote the charter')
         require(program.supply != 1 or [v for v in s.mu.values() if v] == [1], f'{label}: the measure is not a Dirac measure')
+    for h in IDENTITIES:
+        s, chain = check_step(f'{program.name}-seq{seed}-balance-{h}', program, runtime, s, chain,
+                              ('balanceOf', (h,), SENDER, 0))
     return s, seen
 
 
@@ -476,9 +510,9 @@ def selector_table(runtime):
 
 def selector_checks(program, runtime, s):
     """The selector table is the entry list exactly; each forbidden call reverts and the
-    state does not change."""
+    state does not change; each required call gives the model result."""
     table = selector_table(runtime)
-    wanted = {st.selector(name, WORDS[name]) for name in program.entries}
+    wanted = {st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
     require(table == wanted, f'{program.name}: selector table {sorted(table)} != entries {sorted(wanted)}')
     for signature in FORBIDDEN:
         code = st.checked(['cast', 'sig', signature]).strip()[2:]
@@ -487,7 +521,11 @@ def selector_checks(program, runtime, s):
         require(code not in table and actual['status'] == 'revert' and actual['output'] == ''
                 and actual['storage'] == storage(s) and actual['balances'].get(st.RECEIVER, 0) == s.balance,
                 f'{program.name}: {signature} is an entry or moved the state')
-    return 1 + len(FORBIDDEN)
+    for signature in REQUIRED:
+        code, name = st.checked(['cast', 'sig', signature]).strip()[2:], signature.split('(')[0]
+        require(code in table, f'{program.name}: {signature} is not an entry')
+        check_step(f'contract-{program.name}-{code}', program, runtime, s, at(s), (name, (1,) * WORDS[name], wallet(4096), 0))
+    return 1 + len(FORBIDDEN) + len(REQUIRED)
 
 
 def dirac_vectors(program, runtime):

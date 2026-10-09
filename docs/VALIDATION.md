@@ -37,7 +37,8 @@ check 36, refusal 49, normal forms 10.
 
 The I3 slice wrote the contract entries in `domain/entries.c`: deposit,
 distribute, withdraw, transfer, attest, cast, amend, and the views mass,
-supply, claimOf, charter, reserve and selfConstituting. The creation code
+supply, claimOf, charter, reserve and selfConstituting (slice O5a adds the
+views balanceOf and totalSupply). The creation code
 writes the genesis rows and the start charter. `interestc data` prints the
 program data. `test/settlement.py` runs each entry in geth, with the
 reverts; its cases went from 60 to 125.
@@ -102,6 +103,16 @@ k = 3 n = 14 gives the packed word, n = 15 gives the revert). The 34 new
 lines of `test/gas-baseline.txt` are the 32 calls and the 2 deploy calls
 at k = 3 n = 63. Thus the file has 175 calls (165 cases and 10 deploy
 calls).
+
+The O5a slice added the ERC-20 read facade: the views `balanceOf(address)`
+and `totalSupply()`, and the `Transfer` event (LOG3) of `transfer`,
+`recover` and the creation code. `test/settlement.py` reads the records of
+each call; its cases went to 188 (deploy 5). `test/claims.py` compares the
+records of each step with the model, and after each step the fold of the
+records since the deploy is mu: sequences 20, steps 500, laws 99,
+contract 73. The gas of each successful transfer went up by E_t = 1787,
+of each successful recover by E_r = 1787, and of each deploy by
+E_g = 1777 for each genesis record.
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

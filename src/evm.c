@@ -166,8 +166,14 @@ void asm_store(Asm *a, unsigned address) {
   asm_op(a, OP_MSTORE);
 }
 
-static int signature(char *text, const char *name, unsigned words) {
+static int signature(char *text, const char *name, unsigned words, const char *types) {
   size_t size = strlen(name);
+  if (types != NULL) {
+    int fits = size + strlen(types) + 3 <= EVM_SIGNATURE;
+    if (fits)
+      snprintf(text, EVM_SIGNATURE, "%s(%s)", name, types);
+    return fits;
+  }
   /* Parentheses and NUL, with one fewer comma when arguments are present. */
   size_t suffix = words == 0 ? 3 : 2;
   int ok = size <= EVM_SIGNATURE - suffix && words <= (EVM_SIGNATURE - suffix - size) / 8;
@@ -185,11 +191,12 @@ static int signature(char *text, const char *name, unsigned words) {
   return 1;
 }
 
-/* With the selector on the stack: jump to label on name(uint256 x words). */
-static void dispatch(Asm *a, const char *name, unsigned words, Label label) {
+/* With the selector on the stack: jump to label on name(uint256 x words),
+ * or on name(types) when types is set. */
+static void dispatch(Asm *a, const char *name, unsigned words, const char *types, Label label) {
   char text[EVM_SIGNATURE];
   unsigned char digest[32] = {0};
-  if (overflow(a, !signature(text, name, words), ASM_FULL_SIGNATURE))
+  if (overflow(a, !signature(text, name, words, types), ASM_FULL_SIGNATURE))
     return;
   lang_keccak256((const unsigned char *)text, strlen(text), digest);
   asm_op(a, OP_DUP1);
@@ -336,7 +343,7 @@ static int runtime_entries(Asm *a, LangRegime regime, const EntryContext *c, FIL
     labels[i] = asm_label(a);
   dispatch_head(a);
   for (size_t i = 0; i < count; i++)
-    dispatch(a, list[i].name, entry_words(&list[i], c->members), labels[i]);
+    dispatch(a, list[i].name, entry_words(&list[i], c->members), list[i].types, labels[i]);
   revert_block(a);
   for (size_t i = 0; i < count; i++) {
     entry(a, labels[i], entry_words(&list[i], c->members), list[i].payment);

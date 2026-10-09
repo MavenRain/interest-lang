@@ -29,7 +29,7 @@ typedef enum {
   OP_JUMPDEST = 0x5b, OP_PUSH0 = 0x5f, OP_PUSH1 = 0x60, OP_PUSH2 = 0x61,
   OP_PUSH4 = 0x63, OP_DUP1 = 0x80, OP_DUP2 = 0x81, OP_DUP3 = 0x82,
   OP_DUP4 = 0x83, OP_SWAP1 = 0x90, OP_SWAP2 = 0x91, OP_SWAP3 = 0x92,
-  OP_CALL = 0xf1, OP_RETURN = 0xf3, OP_REVERT = 0xfd
+  OP_LOG3 = 0xa3, OP_CALL = 0xf1, OP_RETURN = 0xf3, OP_REVERT = 0xfd
 } Op;
 
 /* A jump label. The labels below LABEL_FREE belong to the core; asm_label
@@ -66,14 +66,16 @@ typedef struct {
   const LangDomainData *data;   /* the program data (evm.h); NULL: the defaults */
 } EntryContext;
 
-/* One external entry, name(uint256 x (words + n when ballots)). The core
- * guards the call value (unless payable) and the calldata size. */
+/* One external entry, name(uint256 x (words + n when ballots)), or
+ * name(types) when types is set. The core guards the call value (unless
+ * payable) and the calldata size (32 bytes per word). */
 typedef struct {
   const char *name;
   unsigned words;   /* calldata words before the ballots */
   int ballots;      /* 1: n ballot words follow, from word `words` (Debreu only) */
   Payment payment;
   void (*emit)(Asm *a, const EntryContext *c);
+  const char *types;  /* NULL: each word is uint256; else the argument text, as "address" */
 } Entry;
 
 /* domain/entries.c: the entries of REGIME in dispatch order, *count set. */

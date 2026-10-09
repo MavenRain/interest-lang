@@ -70,7 +70,8 @@ def contract(program):
         return out.read_text().strip()
 
     creation, runtime = part('creation'), part('runtime', '--runtime')
-    S.deploy('differential-deploy', creation, runtime, S.data_storage(program, binary=INTERESTC))
+    S.deploy('differential-deploy', creation, runtime, S.data_storage(program, binary=INTERESTC),
+             S.data_logs(program, binary=INTERESTC))
     return runtime
 
 

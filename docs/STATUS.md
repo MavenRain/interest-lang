@@ -26,8 +26,9 @@ milestone of SPEC section 10 is open.
 - The contract entries of SPEC section 7 in `domain/entries.c`:
   `deposit`, `distribute`, `withdraw`, `transfer`, `attest`, `recover`
   (slice O3), `cast`, `amend` and the views `mass`, `supply`, `claimOf`, `charter`, `reserve`,
-  `selfConstituting`. The creation code writes the genesis storage
-  (slice I3).
+  `selfConstituting`, and the ERC-20 read facade `balanceOf` and
+  `totalSupply` with the `Transfer` event (slice O5a). The creation code
+  writes the genesis storage (slice I3).
 - The reference model and the differential test `test/claims.py`:
   operation sequences, the law vectors and the contract checks (slice I4).
 - Three examples: a Debreu charter vote, a labelled-constitution
@@ -66,8 +67,12 @@ milestone of SPEC section 10 is open.
   `evm run` does not charge the intrinsic gas of a transaction, and
   `test/claims.py` has no gas check. Each settlement call must not use more
   gas than its line in `test/gas-baseline.txt`.
-- The ERC-721 example gives the ownership model of ERC-721, not its ABI:
-  SPEC section 2 refuses `balanceOf`, `approve` and `transferFrom`.
+- The ERC-20 facade is read only. SPEC section 2 refuses `allowance`,
+  `approve` and `transferFrom`, and the contract has no `name`, `symbol` or
+  `decimals`. The account of the facade is the identity: `balanceOf` reads
+  MU, so a wallet reads its mass only at the address of its identity. The
+  ERC-721 example has the ERC-20 facade, not the ERC-721 ABI (`ownerOf`,
+  the `Transfer` event with an indexed token id).
 
 ## Internal boundaries
 

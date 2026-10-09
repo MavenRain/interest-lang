@@ -32,7 +32,7 @@ static int check(const char *label, const char *name, int ballots, int accepted)
   LangContract contract = {ballots ? 63u : 1u, LANG_REGIME_DEBREU,
                            codes, ballots ? sizeof codes : 3u, 3, NULL};
   fixture = (Entry){name, 0, ballots, ENTRY_NONPAYABLE,
-                    ballots ? lang_entry_cast : constant};
+                    ballots ? lang_entry_cast : constant, NULL};
   FILE *out = tmpfile();
   FILE *err = tmpfile();
   if (out == NULL || err == NULL) {

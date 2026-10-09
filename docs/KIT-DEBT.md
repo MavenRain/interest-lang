@@ -94,6 +94,17 @@ that alias the source file, including hard links and symlinks
    The kit can take these changes by a sync, or keep its bound of 14
    members at k = 3 and 6 members at k = 4.
 
+## ERC-20 facade (slice O5a)
+
+10. Status 2026-10-09: not in lang-template. Slice O5a adds
+    `OP_LOG3 = 0xa3` to `Op` (`src/asm.h`) and a last field
+    `const char *types` to `Entry` (`src/asm.h`; NULL: each word is
+    `uint256`, else the argument text, for example "address").
+    `signature()` (`src/evm.c`) writes `name(types)` when `types` is set;
+    the calldata size guard stays `words` x 32 bytes. The positional
+    initializers of the entries stay valid, because C sets the missing last
+    field to NULL.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit
