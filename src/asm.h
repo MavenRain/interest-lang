@@ -121,7 +121,11 @@ void asm_load(Asm *a, unsigned address);
 void asm_store(Asm *a, unsigned address);
 /* Reverts unless calldata word j is below 2^160. */
 void asm_address_guard(Asm *a, unsigned j);
+/* index -> the decision code at that index of the verdict table of members
+ * and k. The index must be below (members + 1)^(k - 1). */
+void asm_verdict(Asm *a, unsigned members, unsigned k);
 /* -> the decision code of the n ballots at calldata words first ..
- * first + n - 1, read from the verdict table. Each ballot must be 1 to k. */
+ * first + n - 1, read from the verdict table (asm_verdict). Each ballot must
+ * be 1 to k. */
 void asm_tally(Asm *a, unsigned first, unsigned members, unsigned k);
 #endif

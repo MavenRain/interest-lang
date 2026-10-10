@@ -279,6 +279,24 @@ static void weigh(Asm *a, unsigned members, unsigned k) {
   asm_op(a, OP_ADD);
 }
 
+/* The table index -> the decision code: the byte at that index of the dense
+ * verdict table, (members + 1)^(k - 1) bytes (table_index). The table is
+ * the one of members and k; the read itself does not use them. */
+void asm_verdict(Asm *a, unsigned members, unsigned k) {
+  (void)members;
+  (void)k;
+  asm_push_label(a, LABEL_TABLE);
+  asm_op(a, OP_ADD);
+  asm_push(a, 0x20);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_CODECOPY);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MLOAD);
+  asm_push(a, 0xf8);
+  asm_op(a, OP_SHR);
+}
+
 /* The decision code of the ballots in calldata words first .. first + n - 1.
  * Each ballot must be 1 to k. */
 void asm_tally(Asm *a, unsigned first, unsigned members, unsigned k) {
@@ -294,16 +312,7 @@ void asm_tally(Asm *a, unsigned first, unsigned members, unsigned k) {
     asm_revert_if(a);
     weigh(a, members, k);
   }
-  asm_push_label(a, LABEL_TABLE);
-  asm_op(a, OP_ADD);
-  asm_push(a, 0x20);
-  asm_op(a, OP_SWAP1);
-  asm_op(a, OP_PUSH0);
-  asm_op(a, OP_CODECOPY);
-  asm_op(a, OP_PUSH0);
-  asm_op(a, OP_MLOAD);
-  asm_push(a, 0xf8);
-  asm_op(a, OP_SHR);
+  asm_verdict(a, members, k);
 }
 
 /* cast x: the decision of the ballots. It writes nothing. */

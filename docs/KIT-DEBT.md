@@ -141,6 +141,21 @@ that alias the source file, including hard links and symlinks
     tcc, `check-clang` compiles `test/metadata.c`, and `check` runs it
     (`test/gate.sh`). The kit has no metadata test.
 
+## Verdict read (slice O2)
+
+14. Status 2026-10-09: not in lang-template. Slice O2 moves the verdict
+    table read out of `asm_tally` (`src/evm.c`) into `asm_verdict(a,
+    members, k)`, declared in `src/asm.h`: the table index on the stack
+    goes to the decision code (one byte of the table, read with
+    `CODECOPY`). `asm_tally` calls it at the same point, so the bytecode
+    does not change. The split lets domain code read the table at an
+    index that it calculates itself, in preparation for a weighted
+    `amend()`. The current `amend()` (`domain/entries.c`) still calls
+    `asm_tally` and counts each ballot once; it does not read stored
+    ownership weights. `asm_verdict` does not use `members` and `k`;
+    the bound table must correspond to those parameters. lang-template
+    `hosts/tcc-evm-dao/src/evm.c` keeps the table read in `asm_tally`.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit
