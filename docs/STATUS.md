@@ -47,6 +47,9 @@ milestone of SPEC section 10 is open.
   none at `k = 0`, the language `attest` is none at `h = 0`, and the
   contract reverts a `transfer` to 0, a
   `recover` from or to 0 and an `attest` of 0.
+- Authenticated weighted ballots (slice O2): `vote(c)` for each
+  identity, the live weighted tally, and `amend()` by the largest
+  remainder to n seats.
 - Four examples: a Debreu charter vote, a labelled-constitution
   impossibility and an ERC-721 Dirac measure with S = 1 (slice I5), and
   the Debreu example in token mode (slice O5b).
@@ -99,6 +102,10 @@ milestone of SPEC section 10 is open.
   pays it out, so the solvency law holds with `>=`.
 - Genesis wallets and identities are below 2^64, because `Nat` in the
   checker is a 64-bit word (KL4).
+- The weighted tally is live: a transfer moves the vote with the mass.
+  There are no rounds, no snapshot and no quorum (SPEC O2).
+- `amend()` decides on n = `members` seats: the largest remainder rounds
+  the weighted tally, and ties go to the lower code.
 
 ## Internal boundaries
 
@@ -115,7 +122,9 @@ section 2. `test/check.sh`, `test/refusal.sh`, `test/normal-forms.py` and
 
 The EVM writer core (`src/evm.c`, `src/asm.h`, `src/keccak.c`) writes the
 dispatcher, the verdict table and `cast`. `test/differential.py` checks
-`cast` and `amend` against `interestc verdicts` in geth.
+`cast` against `interestc verdicts` in geth. Authenticated `amend()` reads
+the stored weights and is covered by `test/settlement.py` and
+`test/claims.py`.
 
 The domain (`domain/domain.lang`, `domain/data.h`, `domain/entries.c`)
 gives the prelude, the entries, the program data type and the four hooks

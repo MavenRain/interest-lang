@@ -2,7 +2,8 @@
 
 interest-lang is a language for an ownership-interest DAO on the EVM. A
 program gives a constitution (a rule that chooses the active charter from
-the ballots of the members) and the program data of the contract: the
+the ballots of the `members` seats; each identity votes with its mass)
+and the program data of the contract: the
 start charter, the genesis units of each identity, the transfer
 restriction R and the payout waterfall W of each charter, and the trusted
 issuers. The compiler `interestc` checks the program, gives the verdict
@@ -36,8 +37,8 @@ An error goes to stderr as `interestc: CODE: DEF: message`, with exit 1.
 
 | File | Regime | What it shows |
 |---|---|---|
-| `examples/arrow-debreu.lang` | Arrow-Debreu | A charter vote. The plurality rule reads the orbit of the ballots, so the program writes its aggregation and the contract has `cast` and `amend`. 10 genesis units over two identities; the laws of SPEC section 5 as refl proofs. |
-| `examples/arrow-impossibility.lang` | Arrow-impossibility | A labelled constitution. The rule reads member position 0, so two configurations in one orbit get two verdicts and no aggregation can exist. The contract has no `cast`, `amend`, `transfer` or `distribute`. |
+| `examples/arrow-debreu.lang` | Arrow-Debreu | A charter vote. The plurality rule reads the orbit of the ballots, so the program writes its aggregation and the contract has `cast`, `vote` and `amend()`: each identity votes with its mass, and `amend()` gives the seats by the largest remainder. 10 genesis units over two identities; the laws of SPEC section 5 as refl proofs. |
+| `examples/arrow-impossibility.lang` | Arrow-impossibility | A labelled constitution. The rule reads member position 0, so two configurations in one orbit get two verdicts and no aggregation can exist. The contract has no `cast`, `vote`, `amend`, `transfer` or `distribute`. |
 | `examples/erc721-dirac.lang` | Arrow-Debreu | ERC-721 as a Dirac measure. S = 1: one identity holds the one unit, and `transfer` moves it whole. A veto constitution; the restricted charter admits a transfer to an accredited receiver only. |
 
 The gate checks and compiles each example and runs its contract in geth

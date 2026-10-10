@@ -366,7 +366,33 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 
 - O1. A Lean proof of the discrete-D facts of section 4.1 (escrow-lang O1).
 - O2. Ballot authentication and tallies weighted by `mu`. escrow-lang has one
-  unweighted ballot for each member.
+  unweighted ballot for each member. RULED 2026-10-09 (USER), MY CALLs 181
+  to 191: the entry `vote(c)` stores one ballot for each identity (the
+  registry image of the caller; identity 0 reverts). A second `vote`
+  replaces the ballot, and `vote(0)` removes it. `cast(b1..bn)` stays a
+  view, and `amend()` takes no argument (181, 182). The tally is live:
+  WEIGHT[c] is the sum of the mass of the identities with the ballot c.
+  `transfer`, `transferFrom` and `recover` move the vote with the mass, so
+  there is no snapshot and there are no rounds (183). `amend()` gives the
+  n = `members` seats by the largest remainder (ties go to the lower code)
+  and reads the verdict table. The table, KL1 and the differential vectors
+  do not change (184). There is no quorum: `amend()` reverts when the
+  WEIGHT sum is 0 (185). BALLOT is the mapping at slot 11, and WEIGHT is
+  the mapping at slot 12 (186). `vote` logs no event (187). The language
+  has `Votes`, `Voters`, `wtally`, `seats`, `vote`, `amendW` and the laws
+  of section 5 (188). The Python harnesses that exist test the EVM
+  behavior (189). The claims runs keep their sequences, and a new vote run
+  is added (190). The slice has five builds, B1 to B5 (191). The B3
+  rulings (2026-10-09): the claims model has BALLOT and WEIGHT from B3
+  (193), and the unknown-selector revert uses 22 more gas (194). Under
+  MY CALL 183 (a), the image law (`transferMovesVote`) replaces the law of
+  the O2 kickoff "a transfer after the snapshot does not change the
+  tally". Slice O2 (2026-10-10): B1 the language and its laws
+  (`examples/arrow-debreu.lang`, `examples/erc721-dirac.lang`), B2 the
+  core split of the verdict read (`asm_verdict`), B3 the contract
+  (`vote`, `amend()`, BALLOT, WEIGHT and the move of the vote), B4 the
+  claims vote run and the vote law calls. Open: rounds, a snapshot and a
+  quorum (O2b, not planned).
 - O3. The forced recovery entry (ERC-1644) and its authorization object.
   RULED 2026-10-08 (USER): the issuer table of the active charter (the
   table that gates `attest`) authorizes `recover`. There is no new storage,
@@ -455,7 +481,14 @@ parse 28, check 61, build output 29, EVM boundaries 4, metadata 56 ABI
 comparisons, refusal 49, normal forms 10, differential 27 and 64 vectors,
 domain tests 11, settlement 240 cases with 9 deploys (245 EVM calls under
 the gas ceiling), the same claims and token runs, and an allowance run of
-10 sequences (200 steps) with 27 law calls, 0 failures. The kit debt of
+10 sequences (200 steps) with 27 law calls, 0 failures. After O2 (2026-10-10),
+`make check` passes with parse 28, check 61, build output 29, EVM
+boundaries 4, metadata 56 ABI comparisons, refusal 49, normal forms 10,
+differential 27 and 64 vectors, domain tests 11, settlement 253 cases with
+9 deploys (258 EVM calls under the gas ceiling), claims 20 sequences (530
+steps) with 126 law calls and 87 contract checks, the same token and
+allowance runs, and a vote run of 10 sequences (300 steps), 0 failures.
+The kit debt of
 `docs/KIT-DEBT.md` is applied in lang-template `fa1131a`, and `a2ce1b8`
 is the first commit of
 this tree. I6 removed the two differences from the kit that

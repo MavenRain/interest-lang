@@ -1,12 +1,12 @@
 # Validation
 
-Date: 2026-10-09. TinyCC: tcc 0.9.28rc 2026-09-04 mob@0fb54300 (AArch64
+Date: 2026-10-10. TinyCC: tcc 0.9.28rc 2026-09-04 mob@0fb54300 (AArch64
 Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 2024-12-20). Python: 3.14.7. Host executable: `build/interestc`, built by
 `make` from this tree (the tree has commits). Host kit: lang-template
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
-`make check` passes after slice O5c. It builds `build/interestc`,
+`make check` passes after slice O2. It builds `build/interestc`,
 `build/parsetool`, `build/evm-boundaries`, `build/metadata` and the three
 test-domain compilers with tcc, compiles the sources and the test tools with the C
 compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
@@ -14,11 +14,12 @@ gate runs these steps: parse 28 round trips, embed-safety, check 61 cases,
 build output 29 checks, EVM signature boundaries 4 checks, metadata 56
 ABI comparisons, refusal 49 cases, normal forms 10, the differential test (27 vectors at k = 3),
 domain tests 11, the differential test of the k = 4 domain (64 vectors),
-settlement 240 cases with 9 deploys and a gas ceiling on their 245 EVM
+settlement 253 cases with 9 deploys and a gas ceiling on their 258 EVM
 calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 530
-steps, 100 law calls, 87 contract checks, a token run of 10 sequences
-totaling 200 steps, and an allowance run of 10 sequences totaling 200
-steps with 27 law calls).
+steps, 126 law calls, 87 contract checks, a token run of 10 sequences
+totaling 200 steps, an allowance run of 10 sequences totaling 200
+steps with 27 law calls, and a vote run of 10 sequences totaling 300
+steps).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
 with `make clean`.
@@ -241,6 +242,54 @@ did not change. Two mutants make the gate fail: a `transferFrom` without
 the allowance store (`example-debreu-transferfrom` fails first), and a
 `transferFrom` without the R check
 (`example-debreu-transferfrom-restricted` fails first).
+
+In slice O2, a ballot became the stored code of the caller identity, and
+the tally became weighted by `mu` (SPEC O2). The Debreu tables have the
+new entry `vote(uint256)`, and `amend()` takes no argument. The ballot
+mapping is at slot 11, and the weight mapping is at slot 12.
+`test/settlement.py` has 13 more cases (253, deploy 9): 10 vote cases
+(`example-debreu-vote`, `-vote-recast`, `-vote-withdraw`,
+`-vote-no-identity`, `-vote-bad-code`, `-vote-value`, `-vote-transfer`,
+`-vote-erc20-transfer`, `-vote-transferfrom` and `-vote-recover`),
+`amend-empty`, `amend-weighted`, `amend-hamilton`, a `vote` at
+impossibility and a `vote` in token mode, less the two old `amend` cases
+with ballot arguments. The gas ceiling went to 258 calls. 75 gas lines
+changed: the moves of mass (each move also moves the vote), the `amend`
+calls, the deploys (code size), the new cases, the two removed cases and
+the two unknown-selector reverts (543 to 565 gas, one more selector
+compare). `test/differential.py` runs only `cast` on its vectors, because
+`amend()` reads the stored weights; `test/settlement.py` runs `amend()`.
+Four mutants of `domain/entries.c` make the gate fail: M1, a `vote` that
+adds 1 and not the mass (`example-debreu-vote` fails first); M2, a `vote`
+without the check of identity 0 (`example-debreu-vote-no-identity`); M3,
+a `transfer` that does not move the vote (`example-debreu-vote-transfer`);
+and M4, an `amend()` that gives the remaining seats to the last code
+(`example-debreu-amend-hamilton`).
+
+The language of slice O2 has `Votes`, `Voters`, `wtally`, `seats`, `vote`
+and `amendW` (SPEC sections 4 and 5). `examples/arrow-debreu.lang` checks
+11 vote laws: `tallyMass`, `seatsTotal`, `seatsQuota`, `recastMoves`,
+`transferMovesVote`, `noDoubleVote`, `amendWeighted`, `amendKeeps`,
+`amendEmpty`, `repeatedVoters` and `repeatedVotersAmend`.
+`examples/erc721-dirac.lang` checks `diracDictator`. Check stays at 61
+cases. Three probes with a wrong value fail the check with TYPE_MISMATCH
+(M5): `seatsTotal` with 4 seats, `seatsQuota` with the tie to the higher
+code, and `tallyMass` with a count of voters in place of the mass.
+`test/claims.py` models BALLOT and WEIGHT. Its `amend` step is `vote(b1)`
+by the step sender and then `amend()`, so the main, token and allowance
+runs keep their sequences. The `amend` law has 9 vectors (identity 1
+votes b1, identity 2 votes b2, and the charter is the verdict of (b1, b2,
+b2)), not 27, and the ERC-721 law calls went from 18 to 20. The vote run
+has 10 sequences of 30 steps (seeds 301 to 310). It draws `vote`,
+`amend`, `transfer`, the ERC-20 `transfer`, `approve`, `transferFrom`,
+`recover`, `attest` and the views. After each call of each sequence, the
+tally in geth is the image of `mu` along the ballots. Together, the
+sequences must have a vote with mass, a `vote(0)`, a successful `amend()`
+and a move of weight. With no `vote` draw, this check fails
+(`CLAIMS FAIL: debreu-vote: the sequences miss ['amend+', 'vote-mass',
+'vote0', 'weight-moves']`). The 42 vote law calls check `recastMoves`
+(12), `transferMovesVote` (18) and `noDoubleVote` (9) at a Debreu state
+with two voters, and the Dirac dictator (3) on the ERC-721 program.
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses
