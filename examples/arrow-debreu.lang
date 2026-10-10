@@ -146,7 +146,9 @@ def distributeNoAgg : EqNat (num (stateOr sW (distribute F (none (Aggregation F)
 -- attest (SPEC section 5): identity 9 is the trusted issuer of each
 -- charter.  Issuer 9 maps wallet 40 to identity 1 and gives 1 the profile
 -- foreign accredited (code 3).  Caller 7 is no issuer: the result is none,
--- and the fallback (`g0`, `prof`) gives 0 + 0.
+-- and the fallback (`g0`, `prof`) gives 0 + 0.  Issuer 9 and h = 0: the
+-- result is none (identity 0 is no identity), so identity 0 keeps the
+-- profile code 0 of `prof`; a write would give it code 3.
 def iss : Charter -> Identity -> Option (prod ()) := fun (c : Charter) (k : Identity) => natEq k 9
 def g0 : Registry := fun (v : Wallet) => none Identity
 def idOr : Option Identity -> Identity := fun (o : Option Identity) =>
@@ -173,6 +175,8 @@ def attestProfile : EqNat (pcode (a9.1 1)) 3 := reflNat 3
 def attestOther : EqNat (natAdd (idOr (a9.0 41)) (pcode (a9.1 2))) 0 := reflNat 0
 def a7 : prod (Registry, Profiles) := pairOr (attest iss g0 prof 7 40 1 (tuple (foreign, accredited)) s0)
 def attestNonIssuer : EqNat (natAdd (idOr (a7.0 40)) (pcode (a7.1 1))) 0 := reflNat 0
+def a90 : prod (Registry, Profiles) := pairOr (attest iss g0 prof 9 40 0 (tuple (foreign, accredited)) s0)
+def attestNoIdentity : EqNat (natAdd (idOr (a90.0 40)) (pcode (a90.1 0))) 0 := reflNat 0
 
 -- The program data of the contract (SPEC section 7): the start charter, the
 -- genesis rows (identity 2 has two wallets), the waterfall and the trusted

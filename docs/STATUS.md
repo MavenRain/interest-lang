@@ -44,7 +44,8 @@ milestone of SPEC section 10 is open.
   mode does not change.
 - Identity 0 is no identity (slice O5b): the checker refuses a genesis
   row with identity 0 (`CONTRACT_GENESIS`), the language `transfer` is
-  none at `k = 0`, and the contract reverts a `transfer` to 0, a
+  none at `k = 0`, the language `attest` is none at `h = 0`, and the
+  contract reverts a `transfer` to 0, a
   `recover` from or to 0 and an `attest` of 0.
 - Four examples: a Debreu charter vote, a labelled-constitution
   impossibility and an ERC-721 Dirac measure with S = 1 (slice I5), and

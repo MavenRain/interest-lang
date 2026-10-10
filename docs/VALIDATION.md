@@ -206,7 +206,10 @@ their coverage. The ERC-721 sequences run 45 steps each so the restored
 zero destinations retain the successful-transfer coverage, for 530
 native steps in total. One mutant makes the gate fail: a
 `transfer` without the guard at `to = 0`
-(`example-debreu-transfer-to-zero` fails first).
+(`example-debreu-transfer-to-zero` fails first). The language `attest`
+is none at `h = 0` too, and `examples/arrow-debreu.lang` checks the law
+`attestNoIdentity`; a mutant `attest` without this guard fails the
+check of `attestNoIdentity`.
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

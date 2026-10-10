@@ -505,11 +505,15 @@ def distribute : (F : ChoiceRule) -> Option (Aggregation F) -> (Charter -> Water
       | 1 (v : prod ()) => none InterestState
 
 -- `attest I G P c w h p s` (SPEC section 5, USER ruling 2026-10-08): when
--- the caller `c` is a trusted issuer of the active charter (`I`), the
--- registry maps the wallet `w` to `h` and the profile of `h` becomes `p`;
--- else none.  The state does not change, so it is not in the result.
+-- the caller `c` is a trusted issuer of the active charter (`I`) and `h`
+-- is not 0 (identity 0 is no identity, MY CALL 150 (b), MY CALL 162 (b)),
+-- the registry maps the wallet `w` to `h` and the profile of `h` becomes
+-- `p`; else none.  The state does not change, so it is not in the result.
 def attest : (Charter -> Identity -> Option (prod ())) -> Registry -> Profiles -> Identity -> Wallet -> Identity -> Profile -> InterestState -> Option (prod (Registry, Profiles)) :=
   fun (I : Charter -> Identity -> Option (prod ())) (G : Registry) (P : Profiles) (c : Identity) (w : Wallet) (h : Identity) (p : Profile) (s : InterestState) =>
     case I s.1.0 c with
     | 0 (u : prod ()) => none (prod (Registry, Profiles))
-    | 1 (u : prod ()) => pureOption (prod (Registry, Profiles)) (tuple (setWallet G w h, setProfile P h p))
+    | 1 (u : prod ()) =>
+      case natEq h 0 with
+      | 0 (v : prod ()) => pureOption (prod (Registry, Profiles)) (tuple (setWallet G w h, setProfile P h p))
+      | 1 (v : prod ()) => none (prod (Registry, Profiles))
