@@ -69,8 +69,9 @@ that alias the source file, including hard links and symlinks
 
 ## Members bound and amend word (slice L1)
 
-9. Status 2026-10-09: not in lang-template. Slice L1 lifts known limit 1
-   in the core of this tree (`src/asm.h`, `src/evm.h`, `src/evm.c`) and in
+9. Status 2026-10-10: in lang-template (slice K5, MY CALL 201; staged,
+   hosts/tcc-evm-dao tree 6bbd074d). Slice L1 lifts known limit 1 in the
+   core of this tree (`src/asm.h`, `src/evm.h`, `src/evm.c`) and in
    `test/evmtool.c`:
    - `EVM_CAPACITY` is 24576 bytes (it was 8192), the EIP-170 limit of the
      runtime. `EVM_FIXUPS` stays 512: the runtime at k = 3 n = 63 has 209
@@ -96,7 +97,8 @@ that alias the source file, including hard links and symlinks
 
 ## ERC-20 facade (slice O5a)
 
-10. Status 2026-10-09: not in lang-template. Slice O5a adds
+10. Status 2026-10-10: in lang-template (slice K5, MY CALL 197; staged,
+    hosts/tcc-evm-dao tree 6bbd074d). Slice O5a adds
     `OP_LOG3 = 0xa3` to `Op` (`src/asm.h`) and a last field
     `const char *types` to `Entry` (`src/asm.h`; NULL: each word is
     `uint256`, else the argument text, for example "address").
@@ -107,7 +109,9 @@ that alias the source file, including hard links and symlinks
 
 ## ERC-20 carrier (slice O5b)
 
-11. Status 2026-10-09: not in lang-template. Slice O5b adds
+11. Status 2026-10-10: in lang-template (slice K5, MY CALL 198; staged,
+    hosts/tcc-evm-dao tree 6bbd074d), except `asset` in `lang_data` and
+    the evmtool verb `token`: they stay differences. Slice O5b adds
     `OP_ADDRESS = 0x30`, `OP_CODESIZE = 0x38`, `OP_EXTCODESIZE = 0x3b`,
     `OP_RETURNDATASIZE = 0x3d` and `OP_STATICCALL = 0xfa` to `Op`
     (`src/asm.h`). The core label `LABEL_END` (`src/asm.h`, before
@@ -124,8 +128,9 @@ that alias the source file, including hard links and symlinks
 
 ## ERC-20 write facade (slice O5c)
 
-12. Status 2026-10-09: not in lang-template. Slice O5c (MY CALL 169 (b))
-    adds text to the program data. The prelude has `mu Text := end | char
+12. Status 2026-10-10: stays a difference (slice K5, MY CALL 199). Slice
+    O5c (MY CALL 169 (b)) adds text to the program data. The prelude has
+    `mu Text := end | char
     Nat Text` (bytes). `lang_data` (`src/check.c`) reads the optional defs
     `name : Text` and `symbol : Text` with `data_text`: each byte 32 ..
     126, at most `LANG_TEXT_MAX` (32) bytes, else CONTRACT_VALUE. Absent
@@ -134,16 +139,18 @@ that alias the source file, including hard links and symlinks
     string return (`return_text`) is domain code in `domain/entries.c` and
     needs no change to `src/`.
 
-13. Status 2026-10-09: not in lang-template. Slice O5c has two other core
-    changes. `EVM_ENTRIES` (`src/evm.c`) is 24, because the Debreu tables
-    list 20 entries; lang-template `hosts/tcc-evm-dao/src/evm.c` keeps 16.
-    The `Makefile` builds `build/metadata` from `test/metadata.c` with
-    tcc, `check-clang` compiles `test/metadata.c`, and `check` runs it
-    (`test/gate.sh`). The kit has no metadata test.
+13. Status 2026-10-10: stays a difference (slice K5, MY CALL 200). Slice
+    O5c has two other core changes. `EVM_ENTRIES` (`src/evm.c`) is 24,
+    because the Debreu tables list 20 entries; lang-template
+    `hosts/tcc-evm-dao/src/evm.c` keeps 16. The `Makefile` builds
+    `build/metadata` from `test/metadata.c` with tcc, `check-clang`
+    compiles `test/metadata.c`, and `check` runs it (`test/gate.sh`). The
+    kit has no metadata test.
 
 ## Verdict read (slice O2)
 
-14. Status 2026-10-09: not in lang-template. Slice O2 moves the verdict
+14. Status 2026-10-10: in lang-template (slice K5, MY CALL 196; staged,
+    hosts/tcc-evm-dao tree 6bbd074d). Slice O2 moves the verdict
     table read out of `asm_tally` (`src/evm.c`) into `asm_verdict(a,
     members, k)`, declared in `src/asm.h`: the table index on the stack
     goes to the decision code (one byte of the table, read with
