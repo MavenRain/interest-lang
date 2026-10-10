@@ -92,7 +92,9 @@ charters 3
 genesis 4096:1:0:2 4097:1:3:3
 restrict d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall rr rr rr
-issuers" data "$out/genesis-wallets.lang"
+issuers
+name interest
+symbol INT" data "$out/genesis-wallets.lang"
 for identity in 1 2; do
   cat > "$out/genesis-duplicate.lang" <<EOF
 def members : Nat := 3
@@ -114,6 +116,26 @@ refuse "genesis identity 0 data" CONTRACT_GENESIS genesis \
   "has a row with identity 0" data "$out/genesis-identity-0.lang"
 refuse "genesis identity 0 build" CONTRACT_GENESIS genesis \
   "has a row with identity 0" build "$out/genesis-identity-0.lang" -o "$out/genesis-identity-0.hex"
+
+# A Text def has bytes 32 .. 126 and at most 32 bytes (O5c, MY CALL 169).
+cat > "$out/text-low.lang" <<'EOF'
+def members : Nat := 3
+def name : Text := char 65 (char 31 end)
+EOF
+refuse "text byte below 32" CONTRACT_VALUE name \
+  "has a byte outside 32 .. 126" data "$out/text-low.lang"
+cat > "$out/text-high.lang" <<'EOF'
+def members : Nat := 3
+def symbol : Text := char 127 end
+EOF
+refuse "text byte above 126" CONTRACT_VALUE symbol \
+  "has a byte outside 32 .. 126" data "$out/text-high.lang"
+cat > "$out/text-long.lang" <<'EOF'
+def members : Nat := 3
+def name : Text := char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 (char 65 end))))))))))))))))))))))))))))))))
+EOF
+refuse "text of 33 bytes" CONTRACT_VALUE name \
+  "has more than 32 bytes" data "$out/text-long.lang"
 
 # Erased Sigma fields may be constructed from erased variables and used
 # in types, while the second field remains available at run time.
@@ -175,26 +197,34 @@ charters 3
 genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
 restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pr rr
-issuers 1:1 2:1" data "$programs/arrow-debreu.lang"
+issuers 1:1 2:1
+name Arrow-Debreu
+symbol AD" data "$programs/arrow-debreu.lang"
 expect "data of arrow-debreu-token" 0 "start 2
 charters 3
 genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
 restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pr rr
 issuers 1:1 2:1
+name interest
+symbol INT
 asset token" data "$programs/arrow-debreu-token.lang"
 expect "data of arrow-impossibility" 0 "start 1
 charters 3
 genesis 4096:1:0:5 4097:2:0:0
 restrict d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall rr rr rr
-issuers 1:1 2:1 3:1" data "$programs/arrow-impossibility.lang"
+issuers 1:1 2:1 3:1
+name interest
+symbol INT" data "$programs/arrow-impossibility.lang"
 expect "data of erc721-dirac" 0 "start 1
 charters 3
 genesis 4096:1:0:1 4097:2:3:0 4098:3:0:0
 restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pp rr
-issuers 1:1 2:1" data "$programs/erc721-dirac.lang"
+issuers 1:1 2:1
+name interest
+symbol INT" data "$programs/erc721-dirac.lang"
 printf 'def members : Nat := 1\ndef start : Nat := 1\n' > "$out/start-nat.lang"
 refuse "a program def start of another type is CONTRACT_TYPE" CONTRACT_TYPE start \
   "does not have its program data type (SPEC section 7)" data "$out/start-nat.lang"

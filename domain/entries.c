@@ -875,6 +875,47 @@ static void self_impossibility(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
+/* The ABI string TEXT as the return data (O5c, MY CALL 169): the offset
+ * 0x20 at memory 0, the length at 0x20, the bytes left-aligned at 0x40,
+ * then RETURN 0 0x40 for empty text, else 0 0x60. TEXT has at most 32
+ * bytes, so one word holds them. */
+static void return_text(Asm *a, const LangText *text) {
+  unsigned char word[32] = {0};
+  memcpy(word, text->byte, text->length);
+  asm_push(a, 0x20);
+  asm_push(a, 0);
+  asm_op(a, OP_MSTORE);
+  asm_push(a, text->length);
+  asm_push(a, 0x20);
+  asm_op(a, OP_MSTORE);
+  asm_push_word(a, word);
+  asm_push(a, 0x40);
+  asm_op(a, OP_MSTORE);
+  asm_push(a, text->length == 0 ? 0x40 : 0x60);
+  asm_push(a, 0);
+  asm_op(a, OP_RETURN);
+}
+
+static const LangText default_name = {sizeof LANG_NAME_DEFAULT - 1, LANG_NAME_DEFAULT};
+static const LangText default_symbol = {sizeof LANG_SYMBOL_DEFAULT - 1, LANG_SYMBOL_DEFAULT};
+
+/* name() (O5c, MY CALL 169): the def name of the program, else "interest". */
+static void erc20_name(Asm *a, const EntryContext *c) {
+  return_text(a, c != NULL && c->data != NULL ? &c->data->name : &default_name);
+}
+
+/* symbol() (O5c, MY CALL 169): the def symbol of the program, else "INT". */
+static void erc20_symbol(Asm *a, const EntryContext *c) {
+  return_text(a, c != NULL && c->data != NULL ? &c->data->symbol : &default_symbol);
+}
+
+/* decimals() (O5c, MY CALL 169): 0, as the mass is whole units. */
+static void erc20_decimals(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_push(a, 0);
+  asm_return_top(a);
+}
+
 static const Entry impossibility[] = {
   {"deposit", 1, 0, ENTRY_PAYABLE, deposit, NULL},
   {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw, NULL},
@@ -887,6 +928,9 @@ static const Entry impossibility[] = {
   {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_impossibility, NULL},
   {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
   {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
+  {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
+  {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
 };
 
 static const Entry debreu[] = {
@@ -910,6 +954,9 @@ static const Entry debreu[] = {
   {"approve", 2, 0, ENTRY_NONPAYABLE, approve, "address,uint256"},
   {"allowance", 2, 0, ENTRY_NONPAYABLE, allowance, "address,address"},
   {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from, "address,address,uint256"},
+  {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
+  {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
+  {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
 };
 
 /* Token mode (O5b): the same rows, but deposit takes kind and a (not
@@ -926,6 +973,9 @@ static const Entry impossibility_token[] = {
   {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_impossibility, NULL},
   {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
   {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
+  {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
+  {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
 };
 
 static const Entry debreu_token[] = {
@@ -949,6 +999,9 @@ static const Entry debreu_token[] = {
   {"approve", 2, 0, ENTRY_NONPAYABLE, approve, "address,uint256"},
   {"allowance", 2, 0, ENTRY_NONPAYABLE, allowance, "address,address"},
   {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from, "address,address,uint256"},
+  {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
+  {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
+  {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
 };
 
 /* The table of REGIME: the token table when the program data selects the
@@ -1103,7 +1156,8 @@ static const char *cap_text(LangCap cap, char *buf, size_t size) {
 /* The `data` verb: start, charters, genesis rows w:h:p:u, restrict (one
  * group of 16 caps per charter, profile pairs row-major), waterfall (one
  * group per charter: p pass, r retain, for rent then sale), issuers c:h,
- * then `asset token` in token mode only (no line for wei, MY CALL 155).
+ * name and symbol (O5c), then `asset token` in token mode only (no line
+ * for wei, MY CALL 155).
  * DATA is not NULL (lang_domain_read). */
 void lang_domain_print(const LangDomainData *data, FILE *out) {
   fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
@@ -1122,7 +1176,8 @@ void lang_domain_print(const LangDomainData *data, FILE *out) {
   fputs("\nissuers", out);
   for (size_t i = 0; i < data->issuers; i++)
     fprintf(out, " %u:%llu", data->issuer[i].charter, data->issuer[i].identity);
-  fputc('\n', out);
+  fprintf(out, "\nname %.*s\nsymbol %.*s\n", (int)data->name.length, (const char *)data->name.byte,
+          (int)data->symbol.length, (const char *)data->symbol.byte);
   if (data->asset == LANG_ASSET_TOKEN)
     fputs("asset token\n", out);
 }

@@ -1648,6 +1648,34 @@ static void data_genesis(C *c, Value *v, LangDomainData *data) {
     refuse(c, "CONTRACT_VALUE", "genesis", "does not reduce to hrow rows that end in hnil");
 }
 
+/* The bytes of the Text def NAME (O5c, MY CALL 169): each byte 32 .. 126,
+ * at most LANG_TEXT_MAX bytes, else CONTRACT_VALUE. */
+static void data_text(C *c, const Value *v, LangText *text, const char *name) {
+  Global *byte = find_global(c, "char");
+  text->length = 0;
+  for (; !c->failed && v->kind == V_CON && v->global == byte && v->nargs == 2; v = v->args[1]) {
+    unsigned long long b = data_nat(c, v->args[0], name);
+    if (c->failed)
+      return;
+    if (b < 32 || b > 126) {
+      refuse(c, "CONTRACT_VALUE", name, "has a byte outside 32 .. 126");
+      return;
+    }
+    if (text->length == LANG_TEXT_MAX) {
+      refuse(c, "CONTRACT_VALUE", name, "has more than 32 bytes");
+      return;
+    }
+    text->byte[text->length++] = (unsigned char)b;
+  }
+  if (!c->failed && !(v->kind == V_CON && v->global == find_global(c, "end")))
+    refuse(c, "CONTRACT_VALUE", name, "does not reduce to char bytes that end in end");
+}
+
+static void text_set(LangText *text, const char *bytes) {
+  text->length = strlen(bytes);
+  memcpy(text->byte, bytes, text->length);
+}
+
 static LangCap data_cap(C *c, const Value *v) {
   LangCap cap = {LANG_CAP_DENY, 0};
   int ok = !c->failed && v->kind == V_CON && v->global->family == find_global(c, "Cap");
@@ -1675,6 +1703,8 @@ static int seen_identity(const LangDomainData *data, size_t i) {
 int lang_data(LangChecked *c, LangDomainData *data) {
   memset(data, 0, sizeof *data);
   data->start = 1;
+  text_set(&data->name, LANG_NAME_DEFAULT);
+  text_set(&data->symbol, LANG_SYMBOL_DEFAULT);
   if (c->failed)
     return LANG_EXIT_REFUSED;
   Global *charter = find_global(c, "Charter");
@@ -1694,6 +1724,12 @@ int lang_data(LangChecked *c, LangDomainData *data) {
   Value *asset = data_def(c, "asset", data_type(c, "AssetMode"));
   if (asset != NULL)
     data->asset = data_code(c, asset, find_global(c, "AssetMode"), "asset") == 2 ? LANG_ASSET_TOKEN : LANG_ASSET_WEI;
+  Value *name = data_def(c, "name", data_type(c, "Text"));
+  if (name != NULL)
+    data_text(c, name, &data->name, "name");
+  Value *symbol = data_def(c, "symbol", data_type(c, "Text"));
+  if (symbol != NULL)
+    data_text(c, symbol, &data->symbol, "symbol");
   Value *genesis = data_def(c, "genesis", data_type(c, "Holders"));
   if (genesis != NULL)
     data_genesis(c, genesis, data);

@@ -349,6 +349,13 @@ mu AssetMode : Type 0 :=
   | wei : AssetMode
   | token : AssetMode
 
+-- SPEC section 7: the ERC-20 name and symbol, the optional program defs
+-- `name` and `symbol` (O5c).  A `Text` is a list of bytes, each 32 .. 126,
+-- at most 32 bytes.  An absent def gives "interest" and "INT".
+mu Text : Type 0 :=
+  | end : Text
+  | char (b : Nat) (rest : Text) : Text
+
 def Waterfall : Type 0 := Kind -> Gate
 
 mu Cap : Type 0 :=

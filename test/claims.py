@@ -55,6 +55,8 @@ REQUIRED = ('balanceOf(address)', 'totalSupply()')
 # the allowance surface. Its FORBIDDEN signatures are entries at Debreu and refusals at impossibility.
 WRITE_FACADE = ('transfer(address,uint256)', 'approve(address,uint256)', 'allowance(address,address)',
                 'transferFrom(address,address,uint256)')
+# The ERC-20 metadata views (O5c B2): entries of every table, in both regimes.
+METADATA = ('name()', 'symbol()', 'decimals()')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,6 +75,8 @@ class Program:
     constituting: int
     verdicts: str = ''
     token: bool = False
+    erc20_name: str = 'interest'
+    erc20_symbol: str = 'INT'
 
     @property
     def supply(self):
@@ -85,7 +89,8 @@ class Program:
             'genesis ' + ' '.join(':'.join(map(str, row)) for row in self.genesis),
             'restrict ' + ' '.join(','.join(row) for row in self.restrict),
             'waterfall ' + ' '.join(self.waterfall),
-            'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers)]
+            'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers),
+            f'name {self.erc20_name}', f'symbol {self.erc20_symbol}']
                          + (['asset token'] if self.token else [])) + '\n'
 
 
@@ -94,7 +99,8 @@ DEBREU = Program(
     'debreu', st.DEBREU, 2, ((4096, 1, 0, 5), (4097, 2, 3, 3), (4098, 2, 3, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
     ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'mass',
-     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1)
+     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1,
+    erc20_name='Arrow-Debreu', erc20_symbol='AD')
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
     'impossibility', st.IMPOSSIBILITY, 1, ((4096, 1, 0, 5), (4097, 2, 0, 0)),
@@ -106,8 +112,10 @@ IMPOSSIBILITY = Program(
 ERC721 = Program(
     'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1), (4097, 2, 3, 0), (4098, 3, 0, 0)),
     (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1)
-# examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b).
-DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True)
+# examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b), and no
+# `name` or `symbol` def (the defaults, O5c).
+DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True,
+                                   erc20_name='interest', erc20_symbol='INT')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -622,7 +630,7 @@ def selector_checks(program, runtime, s):
     """The selector table is the entry list exactly; each forbidden call reverts and the
     state does not change; each required call gives the model result."""
     table = selector_table(runtime)
-    facade = WRITE_FACADE if 'transfer' in program.entries else ()
+    facade = (WRITE_FACADE if 'transfer' in program.entries else ()) + METADATA
     wanted = ({st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
               | {st.selector(signature.split('(')[0], 0, signature) for signature in facade})
     require(table == wanted, f'{program.name}: selector table {sorted(table)} != entries {sorted(wanted)}')

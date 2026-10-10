@@ -122,6 +122,12 @@ def allowed(owner, spender):
     return int(checked(['cast', 'index', 'uint256', str(spender), f'0x{slot(ALLOWANCE, owner):064x}']).strip(), 16)
 
 
+def abi_text(value):
+    """The return data of the ABI string VALUE (O5c): the offset 0x20, the length, the bytes padded."""
+    raw = value.encode()
+    return f'{0x20:064x}{len(raw):064x}' + raw.hex().ljust((len(raw) + 31) // 32 * 64, '0')
+
+
 def paid_log(h, wallet, paid, moved, address=RECEIVER):
     """The Paid(h, wallet, paid, moved) record of withdraw (L6) at ADDRESS: topic1 is the identity,
     topic2 the calling wallet, the data the paid wei and the dust that moved."""
@@ -195,7 +201,7 @@ def run(name, code, calldata, *, before=None, value=0, create=False, sender=SEND
 def expect(name, code, calldata, before, after, result, *, value=0, sender=SENDER, logs=()):
     actual = run(name, code, calldata, before=before, value=value, sender=sender)
     wanted = dict(status='revert' if result is None else 'success',
-                  output='' if result is None else f'{result:064x}',
+                  output='' if result is None else result if isinstance(result, str) else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v},
                   logs=list(logs))
     got = {key: actual[key] for key in wanted}
@@ -208,7 +214,7 @@ def paid_case(name, code, calldata, before, after, result, *, balance, sender, l
     actual = run(name, code, calldata, before=before, sender=sender, balance=balance)
     paid = 0 if result is None else result
     wanted = dict(status='revert' if result is None else 'success',
-                  output='' if result is None else f'{result:064x}',
+                  output='' if result is None else result if isinstance(result, str) else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v},
                   receiver=balance - paid, sender=10**24 + paid, logs=list(logs))
     got = dict(status=actual['status'], output=actual['output'], storage=actual['storage'],
@@ -460,6 +466,9 @@ def debreu_example_cases():
              ('approve-value', data('approve', 2, 5), base, None, None, 1, one),
              ('allowance', data('allowance', 1, 2), {**base, a12: 5}, None, 5, 0, SENDER),
              ('allowance-none', data('allowance', 1, 2), base, None, 0, 0, SENDER),
+             ('name', data('name'), base, None, abi_text('Arrow-Debreu'), 0, SENDER),
+             ('symbol', data('symbol'), base, None, abi_text('AD'), 0, SENDER),
+             ('decimals', data('decimals'), base, None, 0, 0, SENDER),
              ('transferfrom', data('transferFrom', 1, 3, 3), given, {**given, a12: 2, mu1: 2, mu3: 3}, 1, 0,
               two, [transfer_log(1, 3, 3)]),
              ('transferfrom-all', data('transferFrom', 1, 3, 5), given, {**given, a12: 0, mu1: 0, mu3: 5}, 1, 0,
@@ -556,7 +565,11 @@ def impossibility_example_cases():
             ('claim', data('claimOf', 1), {**base, INDEX: 2}, None, 10, 0, SENDER),
             ('balance-1', data('balanceOf', 1), base, None, 5, 0, SENDER),
             ('total-supply', data('totalSupply'), base, None, 5, 0, SENDER),
-            ('total-supply-value', data('totalSupply'), base, None, None, 1, SENDER)]
+            ('total-supply-value', data('totalSupply'), base, None, None, 1, SENDER),
+            # No name or symbol def: the defaults (O5c, MY CALL 180).
+            ('name', data('name'), base, None, abi_text('interest'), 0, SENDER),
+            ('symbol', data('symbol'), base, None, abi_text('INT'), 0, SENDER),
+            ('decimals', data('decimals'), base, None, 0, 0, SENDER)]
     # No write facade at impossibility (O5c, MY CALL 163): the selectors are unknown.
     rows += [('transferfrom', data('transferFrom', 1, 2, 1), base, None, None, 0, one),
              ('approve', data('approve', 2, 1), base, None, None, 0, one)]
@@ -587,7 +600,7 @@ def token_case(name, runtime, calldata, before, after, result, *, variant, held,
     actual = run(name, runtime, calldata, before=before, value=value, sender=sender,
                  token=(TOKEN, token_code(variant), held))
     wanted = dict(status='revert' if result is None else 'success',
-                  output='' if result is None else f'{result:064x}',
+                  output='' if result is None else result if isinstance(result, str) else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v}, logs=list(logs),
                   token={k: v for k, v in (held if moved is None else moved).items() if v})
     got = {key: actual[key] for key in wanted}

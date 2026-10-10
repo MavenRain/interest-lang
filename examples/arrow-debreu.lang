@@ -46,6 +46,11 @@ def massOne : EqNat (mass m2 1) 3 := reflNat 3
 def massTwo : EqNat (mass m2 2) 2 := reflNat 2
 def conserved : EqNat (natAdd (mass m2 1) (mass m2 2)) 5 := reflNat 5
 
+-- ERC-20 metadata (SPEC section 7, O5c): `name` is "Arrow-Debreu" and
+-- `symbol` is "AD", one ASCII code for each byte.
+def name : Text := char 65 (char 114 (char 114 (char 111 (char 119 (char 45 (char 68 (char 101 (char 98 (char 114 (char 101 (char 117 end)))))))))))
+def symbol : Text := char 65 (char 68 end)
+
 -- Interest state (refl candidates, SPEC section 5 laws).  `restrict` gives
 -- the restriction of each charter: `open` admits any amount, `restricted`
 -- admits up to 4 units, `frozen` admits nothing.  Each identity is

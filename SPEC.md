@@ -90,6 +90,12 @@ one ERC-20 carrier, O5b). The facade is the same in both modes. In token
 mode the contract also calls `transferFrom` on the carrier; that call is to
 another contract.
 
+The optional defs `name : Text` and `symbol : Text` give the ERC-20 name
+and symbol (O5c). Each byte of the text is in the range 32 .. 126, and a
+def has a maximum of 32 bytes. If not, the check refuses the program with
+`CONTRACT_VALUE`. If a def is absent, the name is "interest" and the
+symbol is "INT".
+
 A program that does not check is refused with a `TYPE_`, `LEX_` or `PARSE_`
 code (`docs/host/README.md`, section Refusals). A refusal is one line on
 stderr, `interestc: CODE: DEF: message`, and exit 1. A usage or IO error exits 2.
@@ -241,7 +247,10 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). At Debreu
   it also adds `transfer(address,uint256)` (the body of `transfer(to, q)`),
   `approve(spender, v)`, `allowance(owner, spender)` and
-  `transferFrom(from, to, q)` (O5c). Each argument is a `uint256` word, but
+  `transferFrom(from, to, q)` (O5c). In both regimes it adds the views
+  `name()` and `symbol()` (ABI strings: the program defs `name` and
+  `symbol`, else "interest" and "INT") and `decimals()` (0: the mass is
+  whole units, O5c). Each argument is a `uint256` word, but
   a facade argument of ABI type `address` is an identity word below 2^160;
   the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
