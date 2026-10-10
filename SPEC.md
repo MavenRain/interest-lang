@@ -53,7 +53,8 @@ def NAME : TYPE := TERM
 
 The first definition must be `members` with a positive integer literal no
 larger than C's `UINT_MAX`, otherwise `REFUSE_MEMBERS`. It fixes the number
-of voting members. The core types `Config` and `Tally` (section 4) read it.
+of seats: the resolution of the weighted vote (O2). The core types `Config`
+and `Tally` (section 4) read it.
 The compiler checks `members` first, then the prelude, then the rest of the
 program.
 
@@ -142,6 +143,12 @@ escrow-lang `SPEC.md` section 4, without change, with the decision space
 `D = Charter`. A definition is a design decision that is not ruled, unless a
 ruling is given.
 
+O2 adds `Votes`, `wtally` and `seats` before the governance rows. `wtally`
+is the image of `mu` along the ballot map (a measure on D), and `seats`
+takes it to a `Tally` of n = `members` seats by the largest remainder (ties
+go to the lower code). The governance rows act on that `Tally` without
+change.
+
 | Type | Meaning (design section) | Definition |
 |---|---|---|
 | `Nat` | units, wei, counts | built-in |
@@ -191,6 +198,8 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter, when `h > 0`: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08; `h > 0`: MY CALL 162 (b), O5b) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
+| `vote h c V` | `Votes` | O2. `Votes := Identity -> Option Ballot`: `none` (EVM code 0) is no ballot. `vote` sets the ballot of `h` to `c`, and no other ballot changes. A second vote replaces the first, and `none` withdraws it. The state does not change. `wtally m V xs` is the image of `m` along the ballots of the listed identities `xs` (`Voters`), counting each identity once even when it is repeated. Laws: `tallyMass`, `repeatedVoters`, `recastMoves`, `transferMovesVote`, `noDoubleVote` |
+| `amendW F L V xs s e` | `InterestState` | O2. W is the total of `wtally mu V xs`. When W is not 0, active charter := `rule F L` of the tally `seats members (wtally mu V xs)`. When W = 0, `s` does not change (no quorum). `e` proves that `seatTally members (wtally mu V xs)` has `members` seats (by evaluation, as for `Config`); `seatTally` pads W = 0 with `(members, 0, 0)` solely for this proof, while `seats` gives `(0, 0, 0)`. It does not move `mu` or the treasury. Laws: `seatsTotal`, `seatsQuota`, `amendWeighted`, `repeatedVotersAmend`, `amendKeeps`, `amendEmpty`, `diracDictator` |
 | `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3). `some (debit h q ; credit k q)` if and only if `c` is a trusted issuer (`I`) of the active charter and `q <= mass h`; otherwise `none`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
 
 Transfer then distribute: the claim travels with the token. Before a
@@ -203,6 +212,21 @@ The allowance (O5c) is the prelude type `Allowance`.
 `approveSets`, `approveOther`, `transferFromMoves`,
 `transferFromAllowance`, `transferFromOver` and `transferFromRestricted`.
 A wrong value in a law gives TYPE_MISMATCH.
+
+The weighted vote (O2) is the prelude types `Votes` and `Voters` and the
+functions `wtally`, `seats`, `vote` and `amendW`. `examples/arrow-debreu.lang`
+checks its 11 laws as equalities (`EqNat`, `EqT3` and `EqDec`): `tallyMass`
+(the tally total is the sum of the distinct balloted voter masses),
+`repeatedVoters` (repeating or reordering identities does not add weight),
+`seatsTotal` (the seats sum to `members` when W is not 0),
+`seatsQuota` (the largest remainder at (5, 0, 5) and
+(3, 0, 7)), `recastMoves` (a second vote and a withdraw),
+`transferMovesVote` (the image law: the vote moves with the mass),
+`noDoubleVote` (moved mass votes one time), `amendWeighted` (the seats
+(2, 0, 1) give `open`), `repeatedVotersAmend` (repeats do not change the
+amendment), `amendKeeps` (`mu` and the treasury do not change)
+and `amendEmpty` (no change at W = 0). `examples/erc721-dirac.lang` checks
+`diracDictator`: the one holder gets all the seats.
 
 ## 6. Regimes
 

@@ -198,6 +198,75 @@ def orbit : Config -> Tally := fun (x : Config) =>
   match x as w in Config return Tally with
   | mkConfig xs e => mkTally (tallyOf xs) e
 
+-- Weighted tallies (O2, SPEC section 4).  `bumpBy d q t` adds `q` to the
+-- count of `d`.  `seats n w` gives n seats to the counts of `w` by the
+-- largest remainder (Hamilton): with W the total of `w`, code c gets
+-- floor(n w_c / W) seats, and the seats left go one each to the largest
+-- remainders n w_c mod W.  Ties go to the lower code (open 1, restricted
+-- 2, frozen 3).  W = 0 gives (0, 0, 0).  `EqT3` is the equality of each
+-- count.
+def bumpBy : Ballot -> Nat -> T3 -> T3 := fun (d : Ballot) (q : Nat) (t : T3) =>
+  match d as w in Charter return T3 with
+  | open => tuple (natAdd t.0 q, t.1)
+  | restricted => tuple (t.0, tuple (natAdd t.1.0 q, t.1.1))
+  | frozen => tuple (t.0, tuple (t.1.0, natAdd t.1.1 q))
+
+def mapT3 : (Nat -> Nat) -> T3 -> T3 := fun (f : Nat -> Nat) (t : T3) =>
+  tuple (f t.0, tuple (f t.1.0, f t.1.1))
+
+def EqT3 : T3 -> T3 -> Type 0 := fun (a : T3) (b : T3) =>
+  prod (EqNat a.0 b.0, prod (EqNat a.1.0 b.1.0, EqNat a.1.1 b.1.1))
+
+def reflT3 : (t : T3) -> EqT3 t t := fun (t : T3) =>
+  tuple (reflNat t.0, tuple (reflNat t.1.0, reflNat t.1.1))
+
+-- `beats a d b c` is 1 when the code `d` with the remainder `a` gets a
+-- seat before the code `c` with the remainder `b`: a > b, or a = b and
+-- d < c.  Else it is 0.  The rank of a code is the count of the codes that
+-- beat it, and `bonus j r` is 1 when the rank `r` is below the count `j`
+-- of the seats left.
+def beats : Nat -> Nat -> Nat -> Nat -> Nat :=
+  fun (a : Nat) (d : Nat) (b : Nat) (c : Nat) =>
+    case natLt b a with
+    | 0 (u : prod ()) =>
+      (case natEq a b with
+       | 0 (v : prod ()) => 0
+       | 1 (v : prod ()) =>
+         (case natLt d c with
+          | 0 (x : prod ()) => 0
+          | 1 (x : prod ()) => 1))
+    | 1 (u : prod ()) => 1
+
+def bonus : Nat -> Nat -> Nat := fun (j : Nat) (r : Nat) =>
+  case natLt r j with
+  | 0 (u : prod ()) => 0
+  | 1 (u : prod ()) => 1
+
+-- `place j f r`: the floors `f` plus one seat for each code whose rank by
+-- the remainders `r` is below `j`.
+def place : Nat -> T3 -> T3 -> T3 := fun (j : Nat) (f : T3) (r : T3) =>
+  tuple (natAdd f.0 (bonus j (natAdd (beats r.1.0 2 r.0 1) (beats r.1.1 3 r.0 1))),
+    tuple (natAdd f.1.0 (bonus j (natAdd (beats r.0 1 r.1.0 2) (beats r.1.1 3 r.1.0 2))),
+      natAdd f.1.1 (bonus j (natAdd (beats r.0 1 r.1.1 3) (beats r.1.0 2 r.1.1 3)))))
+
+def hamilton : Nat -> Nat -> T3 -> T3 := fun (n : Nat) (W : Nat) (w : T3) =>
+  place (natSub n (total (mapT3 (fun (x : Nat) => natDiv (natMul n x) W) w)))
+    (mapT3 (fun (x : Nat) => natDiv (natMul n x) W) w)
+    (mapT3 (fun (x : Nat) => natMod (natMul n x) W) w)
+
+def seats : Nat -> T3 -> T3 := fun (n : Nat) (w : T3) =>
+  case natEq (total w) 0 with
+  | 0 (u : prod ()) => hamilton n (total w) w
+  | 1 (u : prod ()) => tuple (0, tuple (0, 0))
+
+-- `seatTally n w` is `seats n w` when W is not 0, else (n, 0, 0).  Thus
+-- its total is n at each `w`, and a program can give the `Tally` proof by
+-- evaluation also at W = 0.  `amendW` reads it only when W is not 0.
+def seatTally : Nat -> T3 -> T3 := fun (n : Nat) (w : T3) =>
+  case natEq (total w) 0 with
+  | 0 (u : prod ()) => seats n w
+  | 1 (u : prod ()) => tuple (n, tuple (0, 0))
+
 mu EqTally : (0 a : Tally) -> (0 b : Tally) -> Type 0 :=
   | reflTally : (0 t : Tally) -> EqTally t t
 
@@ -329,6 +398,44 @@ def debit : (m : Measure) -> (p : Identity) -> (n : Nat) -> (0 e : Le n (mass m 
     case natEq h p with
     | 0 (u : prod ()) => m h
     | 1 (u : prod ()) => natSub (m h) n
+
+-- Votes (O2, SPEC section 5): the ballot of each identity.  Leg 0 (none)
+-- is no ballot, EVM code 0.  `vote h c V` sets the ballot of `h` to `c`:
+-- a second vote replaces the first, and `none` withdraws it.  `Voters` is
+-- a list of identities.  `wtally m V xs` is the image of `m` along the
+-- ballots of the listed identities: each listed `h` with a ballot `c`
+-- adds `mass m h` to the count of `c` once.  Repeated identities do not
+-- add weight.  Thus the vote moves with the mass.
+def Votes : Type 0 := Identity -> Option Ballot
+
+def noVotes : Votes := fun (h : Identity) => none Ballot
+
+def vote : Identity -> Option Ballot -> Votes -> Votes :=
+  fun (h : Identity) (c : Option Ballot) (V : Votes) (k : Identity) =>
+    case natEq k h with
+    | 0 (u : prod ()) => V k
+    | 1 (u : prod ()) => c
+
+mu Voters : Type 0 :=
+  | vnil : Voters
+  | vcons (h : Identity) (t : Voters) : Voters
+
+def rec foldVoters : (0 B : Type 0) -> (Identity -> B -> B) -> B -> Voters -> B :=
+  fun (0 B : Type 0) (f : Identity -> B -> B) (z : B) (xs : Voters) =>
+    match xs as w in Voters return B with
+    | vnil => z
+    | vcons h t => f h (foldVoters B f z t)
+
+-- Clear a counted identity's ballot for the remaining list, so a later
+-- occurrence cannot count its mass again.  The supplied `V` is unchanged.
+def rec wtally : Measure -> Votes -> Voters -> T3 :=
+  fun (m : Measure) (V : Votes) (xs : Voters) =>
+    match xs as w in Voters return T3 with
+    | vnil => tuple (0, tuple (0, 0))
+    | vcons h t =>
+      (case V h with
+       | 0 (u : prod ()) => wtally m V t
+       | 1 (c : Ballot) => bumpBy c (mass m h) (wtally m (vote h (none Ballot) V) t))
 
 -- @section 9 Restriction and waterfall
 -- SPEC section 4, rows `Kind` to `Restriction`.  The meaning of `pass` is
@@ -501,6 +608,18 @@ def deposit : Kind -> Nat -> InterestState -> InterestState :=
 def amendState : (F : ChoiceRule) -> Aggregation F -> Config -> InterestState -> InterestState :=
   fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (s : InterestState) =>
     tuple (s.0, tuple (gov F L x, s.1.1))
+
+-- `amendW F L V xs s e` (O2) is `amend` on the weighted vote: when the
+-- listed voters hold mass (W is not 0), the active charter becomes `rule F
+-- L` of the `members` seats of `wtally s.0 V xs`.  When W = 0, s does not
+-- change (no quorum, MY CALL 185 (a)).  `e` is the proof that the seat
+-- tally has `members` seats: a program gives it by evaluation, as for
+-- `Config`.  The measure and the treasury do not change.
+def amendW : (F : ChoiceRule) -> (L : Aggregation F) -> (V : Votes) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally s.0 V xs))) members -> InterestState :=
+  fun (F : ChoiceRule) (L : Aggregation F) (V : Votes) (xs : Voters) (s : InterestState) (e : EqNat (total (seatTally members (wtally s.0 V xs))) members) =>
+    case natEq (total (wtally s.0 V xs)) 0 with
+    | 0 (u : prod ()) => tuple (s.0, tuple (rule F L (mkTally (seatTally members (wtally s.0 V xs)) e), s.1.1))
+    | 1 (u : prod ()) => s
 
 -- `recycle h S s` (O11): the claim of `h` becomes 0 and its remainder
 -- `natMod (num s h) S` goes to the dust; the whole wei of the dust go to

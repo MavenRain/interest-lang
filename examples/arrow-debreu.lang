@@ -209,6 +209,50 @@ def attestNonIssuer : EqNat (natAdd (idOr (a7.0 40)) (pcode (a7.1 1))) 0 := refl
 def a90 : prod (Registry, Profiles) := pairOr (attest iss g0 prof 9 40 0 (tuple (foreign, accredited)) s0)
 def attestNoIdentity : EqNat (natAdd (idOr (a90.0 40)) (pcode (a90.1 0))) 0 := reflNat 0
 
+-- Weighted vote (O2, SPEC section 5).  `mG` is the genesis measure:
+-- identity 1 has 5 units and identity 2 has 3 + 2.  Identity 1 votes open
+-- and identity 2 votes frozen.  The tally is the image of the mass, and
+-- the `members` = 3 seats go by the largest remainder.
+def mG : Measure := credit (credit empty 1 5) 2 5
+def V0 : Votes := vote 2 (pureOption Ballot frozen) (vote 1 (pureOption Ballot open) noVotes)
+def vs : Voters := vcons 1 (vcons 2 vnil)
+def wV : T3 := wtally mG V0 vs
+def tallyMass : prod (EqT3 wV (tuple (5, tuple (0, 5))), EqNat (total wV) (natAdd (mass mG 1) (mass mG 2))) := tuple (reflT3 (tuple (5, tuple (0, 5))), reflNat 10)
+
+-- A repeated identity contributes once, including nonadjacent repeats
+-- and a different enumeration order.
+def repeatedVoters : prod (EqT3 (wtally mG V0 (vcons 1 (vcons 2 (vcons 2 vnil)))) wV, EqT3 (wtally mG V0 (vcons 2 (vcons 1 (vcons 2 (vcons 1 vnil))))) wV) := tuple (reflT3 wV, reflT3 wV)
+def seatsTotal : EqNat (total (seats members wV)) members := reflNat 3
+def seatsQuota : prod (EqT3 (seats members wV) (tuple (2, tuple (0, 1))), EqT3 (seats members (tuple (3, tuple (0, 7)))) (tuple (1, tuple (0, 2)))) := tuple (reflT3 (tuple (2, tuple (0, 1))), reflT3 (tuple (1, tuple (0, 2))))
+
+-- Identity 1 votes again (restricted): its 5 units move to restricted.
+-- Then it withdraws its ballot: its 5 units leave the tally.
+def V1 : Votes := vote 1 (pureOption Ballot restricted) V0
+def recastMoves : prod (EqT3 (wtally mG V1 vs) (tuple (0, tuple (5, 5))), EqT3 (wtally mG (vote 1 (none Ballot) V1) vs) (tuple (0, tuple (0, 5)))) := tuple (reflT3 (tuple (0, tuple (5, 5))), reflT3 (tuple (0, tuple (0, 5))))
+
+-- The image law: identity 1 moves 2 units to identity 2, and the 2 units
+-- then vote frozen.
+def sV : InterestState := tuple (mG, tuple (restricted, t0))
+def eV : Le 2 (mass sV.0 1) := (3, reflNat 5)
+def transferMovesVote : EqT3 (wtally (stateOr sV (transfer restrict prof 1 2 2 sV eV)).0 V0 vs) (tuple (3, tuple (0, 7))) := reflT3 (tuple (3, tuple (0, 7)))
+
+-- No double vote: identity 1 votes open, moves its 5 units to identity 2
+-- (the open charter admits them), and identity 2 votes frozen.  The tally
+-- counts the 5 units one time, at frozen: the total is the mass of 1 and 2.
+def sO : InterestState := tuple (mG, tuple (open, t0))
+def e5 : Le 5 (mass sO.0 1) := (0, reflNat 5)
+def mN : Measure := (stateOr sO (transfer restrict prof 1 2 5 sO e5)).0
+def noDoubleVote : prod (EqT3 (wtally mN V0 vs) (tuple (0, tuple (0, 10))), EqNat (total (wtally mN V0 vs)) (natAdd (mass mN 1) (mass mN 2))) := tuple (reflT3 (tuple (0, tuple (0, 10))), reflNat 10)
+
+-- amendW: the seats (2, 0, 1) give `plural` = open.  The measure and the
+-- treasury do not change.  With no votes (W = 0), the charter stays.
+def sVD : InterestState := deposit rent 7 sV
+def sA : InterestState := amendW F agg V0 vs sVD (reflNat 3)
+def amendWeighted : EqDec sA.1.0 open := reflDec open
+def repeatedVotersAmend : EqDec (amendW F agg V0 (vcons 1 (vcons 2 (vcons 2 vnil))) sVD (reflNat 3)).1.0 open := reflDec open
+def amendKeeps : prod (prod (EqNat (mass sA.0 1) (mass sVD.0 1), EqNat (mass sA.0 2) (mass sVD.0 2)), EqNat (sA.1.1.0 rent) (sVD.1.1.0 rent)) := tuple (tuple (reflNat 5, reflNat 5), reflNat 7)
+def amendEmpty : EqDec (amendW F agg noVotes vs sVD (reflNat 3)).1.0 restricted := reflDec restricted
+
 -- The program data of the contract (SPEC section 7): the start charter, the
 -- genesis rows (identity 2 has two wallets), the waterfall and the trusted
 -- issuers.  `restrict` is above.

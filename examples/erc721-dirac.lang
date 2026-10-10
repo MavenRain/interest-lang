@@ -63,6 +63,10 @@ def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 1 s0 e1)
 def transferMoves : EqNat (mass s1.0 2) 1 := reflNat 1
 def transferLeaves : EqNat (mass s1.0 1) 0 := reflNat 0
 
+-- Weighted vote (O2): the one unit is at identity 1.  The holder votes
+-- frozen and gets all `members` seats: a Dirac measure is a dictator.
+def diracDictator : EqT3 (seats members (wtally m1 (vote 1 (pureOption Ballot frozen) noVotes) (vcons 1 (vcons 2 vnil)))) (tuple (0, tuple (0, 3))) := reflT3 (tuple (0, tuple (0, 3)))
+
 -- The restricted charter admits the transfer to identity 2 (accredited)
 -- and not the transfer to identity 3 (retail): the fallback s0 keeps the
 -- unit at identity 1.
