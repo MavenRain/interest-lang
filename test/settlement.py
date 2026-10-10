@@ -24,7 +24,7 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                nonce='0x0000000000000000', timestamp='0x0', number='0x0',
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
-MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE = range(11)
+MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE, BALLOT, WEIGHT = range(13)
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
@@ -483,15 +483,45 @@ def debreu_example_cases():
              ('transferfrom-value', data('transferFrom', 1, 3, 1), given, None, None, 1, two),
              ('transferfrom-owner', data('transferFrom', 1, 3, 1), opened, None, None, 0, one)]
     digits = interestc('verdicts', DEBREU, 'F').strip()
+    b1, b2, b3 = slot(BALLOT, 1), slot(BALLOT, 2), slot(BALLOT, 3)
+    w1, w2, w3 = slot(WEIGHT, 1), slot(WEIGHT, 2), slot(WEIGHT, 3)
     for b in (1, 2, 3):
         vector = (b, b, b)
         code = int(digits[vector_index(vector, 3)])
+        # Both identities vote b (O2): WEIGHT[b] = 10, so the seats are the tally of (b, b, b).
+        voted = {**base, b1: b, b2: b, slot(WEIGHT, b): 10}
         rows += [(f'cast-{b}', data('cast', *vector), base, None, code, 0, SENDER),
-                 (f'amend-{b}', data('amend', *vector), base, {**base, CHARTER: code}, code, 0, SENDER),
+                 (f'amend-{b}', data('amend'), voted, {**voted, CHARTER: code}, code, 0, SENDER),
                  (f'charter-after-amend-{b}', data('charter'), {**base, CHARTER: code}, None, code, 0, SENDER)]
-    rows += [('amend-value', data('amend', 1, 1, 1), base, None, None, 1, SENDER),
-             ('amend-ballot', data('amend', 0, 1, 1), base, None, None, 0, SENDER),
-             ('amend-short', data('amend', 1, 1, 1)[:-64], base, None, None, 0, SENDER)]
+    # The weighted vote (O2, MY CALLs 181 to 185). Identity 1 (wallet 4096) and identity 2
+    # (wallet 4097) hold 5 units each; identity 3 has no wallet. n = 3 seats.
+    voted = {**base, b1: 1, w1: 5, b2: 2, w2: 5}
+    weighted = {**base, mu1: 8, mu2: 2, b1: 1, w1: 8, b2: 2, w2: 2}
+    hamilton = {**base, b1: 1, w1: 5, b2: 3, w3: 5}
+    seated = {seats: int(digits[vector_index(seats, 3)]) for seats in ((1, 1, 2), (1, 1, 3))}
+    rows += [('vote', data('vote', 1), base, {**base, b1: 1, w1: 5}, 1, 0, one),
+             ('vote-recast', data('vote', 3), {**base, b1: 1, w1: 5}, {**base, b1: 3, w3: 5}, 3, 0, one),
+             ('vote-withdraw', data('vote', 0), {**base, b1: 2, w2: 5}, base, 0, 0, one),
+             ('vote-no-identity', data('vote', 1), base, None, None, 0, SENDER),
+             ('vote-bad-code', data('vote', 4), base, None, None, 0, one),
+             ('vote-value', data('vote', 1), base, None, None, 1, one),
+             ('vote-transfer', data('transfer', 2, 4), voted, {**voted, mu1: 1, mu2: 9, w1: 1, w2: 9}, 1, 0, one,
+              [transfer_log(1, 2, 4)]),
+             ('vote-erc20-transfer', data('erc20Transfer', 2, 5), {**opened, b1: 1, w1: 5, b2: 3, w3: 5},
+              {**opened, mu1: 0, mu2: 10, b1: 1, b2: 3, w3: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
+             ('vote-transferfrom', data('transferFrom', 1, 3, 3), {**given, b1: 1, w1: 5, b3: 2},
+              {**given, a12: 2, mu1: 2, mu3: 3, b1: 1, w1: 2, b3: 2, w2: 3}, 1, 0, two, [transfer_log(1, 3, 3)]),
+             ('vote-recover', data('recover', 2, 3, 2), {**base, b2: 1, w1: 5, b3: 3},
+              {**base, mu2: 3, mu3: 2, b2: 1, w1: 3, b3: 3, w3: 2}, 1, 0, one, [transfer_log(2, 3, 2)]),
+             # W = 0 reverts (MY CALL 185); (8, 2, 0): floors (2, 0, 0), the seat left goes to the
+             # larger remainder (code 2); (5, 0, 5): floors (1, 0, 1), the remainders tie, the seat
+             # left goes to the lower code (seats (2, 0, 1), not (1, 0, 2)).
+             ('amend-empty', data('amend'), base, None, None, 0, SENDER),
+             ('amend-value', data('amend'), hamilton, None, None, 1, SENDER),
+             ('amend-weighted', data('amend'), weighted, {**weighted, CHARTER: seated[(1, 1, 2)]},
+              seated[(1, 1, 2)], 0, SENDER),
+             ('amend-hamilton', data('amend'), hamilton, {**hamilton, CHARTER: seated[(1, 1, 3)]},
+              seated[(1, 1, 3)], 0, SENDER)]
     return table_cases('example-debreu', runtime, rows) + accrual_cases(runtime, base)
 
 
@@ -556,7 +586,8 @@ def impossibility_example_cases():
             ('transfer', data('transfer', 2, 1), base, None, None, 0, one),
             ('recover', data('recover', 1, 2, 1), base, None, None, 0, one),
             ('cast', data('cast', 1, 1, 1), base, None, None, 0, one),
-            ('amend', data('amend', 1, 1, 1), base, None, None, 0, one),
+            ('amend', data('amend'), base, None, None, 0, one),
+            ('vote', data('vote', 1), base, None, None, 0, one),
             ('mass', data('mass', 1), base, None, 5, 0, SENDER),
             ('supply', data('supply'), base, None, 5, 0, SENDER),
             ('charter', data('charter'), base, None, 1, 0, SENDER),
@@ -657,7 +688,9 @@ def token_cases():
              0, one, []),
             ('distribute-token', data('distribute', 0), {**base, rent: 30, sale: 8},
              {**base, rent: 0, sale: 8, INDEX: 30}, 30, 'standard', stock, None, 0, SENDER, []),
-            ('view-token-value', data('mass', 1), base, None, None, 'standard', stock, None, 1, SENDER, [])]
+            ('view-token-value', data('mass', 1), base, None, None, 'standard', stock, None, 1, SENDER, []),
+            ('vote', data('vote', 2), base, {**base, slot(BALLOT, 1): 2, slot(WEIGHT, 2): 5}, 2, 'standard', stock,
+             None, 0, one, [])]
     # The allowance surface in token mode (O5c, MY CALL 163): the same body as in wei mode.
     a12 = allowed(1, 2)
     rows += [('transferfrom', data('transferFrom', 1, 3, 3), {**base, a12: 5},
@@ -716,7 +749,9 @@ def main(write_gas):
                    verdict(members, codes, ballots, k))
             cases += 1
         decision = verdict(members, codes, vectors[0], k)
-        expect(f'amend-{name}', code, data('amend', *vectors[0]), {}, {CHARTER: decision}, decision)
+        # The stored weights of the ballots vectors[0] (O2): W = n, so the seats are their tally.
+        weights = {slot(WEIGHT, b): vectors[0].count(b) for b in set(vectors[0])}
+        expect(f'amend-{name}', code, data('amend'), weights, {**weights, CHARTER: decision}, decision)
         cases += 1
     _, members, codes, _ = l1_case(3, 63)
     deploy('debreu-n63-deploy', bytecode('creation', members, 'debreu', *codes),

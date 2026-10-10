@@ -5,9 +5,9 @@ The checker side is `interestc verdicts PROG F`: one digit per ballot vector,
 in the order of itertools.product over the codes 1 to k (k = 3 unless
 `--decisions K`), with the first ballot outermost. The contract side deploys the creation code of `interestc
 build` in geth evm (its genesis storage must match `interestc data`), then
-runs `cast` and `amend` on each ballot vector. Each result must equal the
-checker digit, and `amend` must write that code to the CHARTER slot and
-nothing else. No verdict comes from Python. Run `make` first.
+runs `cast` on each ballot vector. Each result must equal the checker
+digit and write nothing. `amend()` reads the stored weights (O2), not a
+ballot vector, so test/settlement.py runs it. No verdict comes from Python. Run `make` first.
 
 usage: python3 test/differential.py [--program PROG] [--interestc INTERESTC --decisions K]
 """
@@ -96,10 +96,8 @@ def main():
     runtime = contract(program)
     for index, (vector, code) in enumerate(verdicts.items()):
         S.expect(f'differential-cast-{index}', runtime, S.data('cast', *vector), {}, {}, code)
-        S.expect(f'differential-amend-{index}', runtime, S.data('amend', *vector), {},
-                 {S.CHARTER: code}, code)
     print(f'DIFFERENTIAL vectors={len(vectors)} '
-          f'codes={"".join(map(str, verdicts.values()))} cast,amend geth=interestc OK '
+          f'codes={"".join(map(str, verdicts.values()))} cast geth=interestc OK '
           f'(logs: {WORK})')
 
 

@@ -235,7 +235,7 @@ The representation lands in one regime of `self_governance_trichotomy`
 
 | Regime | Aggregation F | Entries |
 |---|---|---|
-| Arrow-impossibility | none | `deposit`, `withdraw`, `attest` (genesis issuers, O7), views. `transfer`, `distribute`, `cast` and `amend` revert. Claims freeze as measures; funds and dust stay in the treasury, not burned and not paid |
+| Arrow-impossibility | none | `deposit`, `withdraw`, `attest` (genesis issuers, O7), views. `transfer`, `distribute`, `cast`, `vote` and `amend` revert. Claims freeze as measures; funds and dust stay in the treasury, not burned and not paid |
 | Arrow-Debreu | one orbit rule | all entries |
 | Schelling-Ising | unreachable at a discrete D (section 4.1) | none |
 
@@ -262,7 +262,9 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   the profile mapping, the active charter slot, `reserve[rent]`,
   `reserve[sale]`, the accrual index, the dust (O11), the carrier address
   (CARRIER, slot 9, token mode only, O5b), the allowance mapping
-  (ALLOWANCE, slot 10, keyed by owner then spender identity, O5c), and the checkpoint
+  (ALLOWANCE, slot 10, keyed by owner then spender identity, O5c), the
+  ballot mapping (BALLOT, slot 11, identity to code 0 to k, 0 = no ballot)
+  and the weight mapping (WEIGHT, slot 12, code to mass) (O2), and the checkpoint
   and numerator mappings for each identity. A mapping slot is `keccak256(key word, base
   slot word)`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
@@ -273,7 +275,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `deposit(kind, a)` is not payable: it pulls a units of the carrier with
   `transferFrom(caller, this, a)` (O5b). The other entries are
   `distribute(kind)`, `withdraw()`, `transfer(to, q)`, `attest(w, h, p)`,
-  `recover(from, to, q)`, `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
+  `recover(from, to, q)`, `cast(b1..bn)` (a view: the verdict of n seat
+  ballots), `vote(c)` and `amend()`. The views are `mass(h)`, `supply()`,
   `claimOf(h)`, `charter()`, `reserve(kind)` and `selfConstituting()` (a
   constant that the compiler computes). The ERC-20 facade adds the views
   `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). At Debreu
@@ -286,8 +289,11 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   a facade argument of ABI type `address` is an identity word below 2^160;
   the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
-  Ballots are call arguments (escrow-lang shape; no ballot authentication,
-  O2). The identity of the caller is the registry image of the caller
+  A ballot is the stored code of the caller identity (O2). `vote(c)` sets
+  BALLOT[h] and moves MU[h] in WEIGHT. `transfer`, `transferFrom` and
+  `recover` move q from WEIGHT[BALLOT[from]] to WEIGHT[BALLOT[to]].
+  `amend()` gives the n seats of WEIGHT by the largest remainder (ties to
+  the lower code) and reads the verdict table. The identity of the caller is the registry image of the caller
   address; `to` is an identity (O10).
 - **Events.** A successful `transfer` and a successful `recover` log one
   `Transfer(from, to, q)` record (LOG3, the ERC-20 event; `from` and `to`
@@ -307,7 +313,9 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   unchanged. A refused recovery (the caller is not an issuer of the
   active charter, `q > mass from`, `from = 0` or `to = 0`, or `from + 1`
   or `to + 1` overflows the registry encoding) reverts and leaves the
-  state unchanged. `attest` reverts at `h = 0`. Identity 0 is no
+  state unchanged. `attest` reverts at `h = 0`. `vote` reverts at identity
+  0, at c > k and on value. `amend()` reverts when the WEIGHT sum is 0.
+  Identity 0 is no
   identity: the registry keeps `h + 1`, so the word 0 means that the
   wallet has no identity (O5b).
   Like `transfer`, `recover` settles both identities before it moves `mu`.

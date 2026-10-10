@@ -12,7 +12,10 @@
  * dust in units of 1/S wei, L6) and CARRIER (slot 9, the ERC-20 carrier
  * address, token mode only, O5b). ALLOWANCE (slot 10, both modes, O5c) maps
  * an owner identity, then a spender identity, to units, as a Solidity
- * nested mapping. In token mode, each amount in wei is an
+ * nested mapping. BALLOT (slot 11, identity -> code 0 .. k, 0 = no ballot)
+ * and WEIGHT (slot 12, code -> units, the sum of MU over the identities
+ * with that ballot) hold the weighted tally (O2, MY CALLs 182, 183 and
+ * 186). In token mode, each amount in wei is an
  * amount in carrier units. S, the sum of the genesis units, is a code
  * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
  *
@@ -30,13 +33,15 @@
 enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
-  SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10
+  SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10, SLOT_BALLOT = 11,
+  SLOT_WEIGHT = 12
 };
 
 /* MEM_CALL: the calldata of a carrier call, the selector at MEM_CALL and
  * word j at MEM_CALL + 4 + 32 j. The selector store also writes zero to
- * 0xc4 .. 0xdf, which no entry uses; MEM_ID and MEM_CHARTER stay clear. */
-enum { MEM_ID = 0x80, MEM_CHARTER = 0xa0, MEM_CALL = 0xe0 };
+ * 0xc4 .. 0xdf, which no entry uses; MEM_ID and MEM_CHARTER stay clear.
+ * MEM_SEAT: the amend scratch after the carrier words (O2). */
+enum { MEM_ID = 0x80, MEM_CHARTER = 0xa0, MEM_CALL = 0xe0, MEM_SEAT = 0x160 };
 
 enum { WORD = 32, LIMITS = LANG_PROFILES * LANG_PROFILES };
 
@@ -574,11 +579,51 @@ static void restriction_guard(Asm *a, unsigned to, unsigned q) {
   asm_revert_if(a);
 }
 
+/* code q -> (nothing): WEIGHT[code] := WEIGHT[code] + q (OP_ADD) or
+ * WEIGHT[code] - q (OP_SUB); no term when code = 0 (no ballot). */
+static void weight_term(Asm *a, Op op) {
+  Label skip = asm_label(a);
+  asm_op(a, OP_DUP2);
+  asm_op(a, OP_ISZERO);
+  asm_jump_if(a, skip);
+  asm_op(a, OP_DUP2);
+  asm_slot(a, SLOT_WEIGHT);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_DUP2);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, op);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
+  asm_op(a, OP_DUP1);
+  asm_jumpdest(a, skip);
+  asm_op(a, OP_POP);
+  asm_op(a, OP_POP);
+}
+
+/* from to q -> (nothing) (O2, MY CALL 183 (a)): the vote moves with the
+ * mass: WEIGHT[BALLOT[from]] -= q, then WEIGHT[BALLOT[to]] += q (code 0:
+ * no term). The caller checks q <= MU[from] first; WEIGHT[BALLOT[from]]
+ * includes MU[from], so the debit does not wrap. */
+static void move_vote(Asm *a) {
+  asm_op(a, OP_DUP3);
+  asm_slot(a, SLOT_BALLOT);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_DUP2);
+  weight_term(a, OP_SUB);
+  asm_op(a, OP_SWAP1);
+  asm_slot(a, SLOT_BALLOT);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_SWAP1);
+  weight_term(a, OP_ADD);
+  asm_op(a, OP_POP);
+}
+
 /* The move of transfer, with h at memory MEM_ID, to the calldata word TO
  * and q the word Q: q > MU[h] reverts; settle h, then settle to (SPEC 5:
- * checkpoints both identities); MU[h] -= q, then MU[to] += q (read after
- * the debit, so to = h keeps the mass); logs Transfer(h, to, q), also at
- * q = 0 and at to = h (O5a); returns 1. */
+ * checkpoints both identities); the vote of q moves from h to to (O2);
+ * MU[h] -= q, then MU[to] += q (read after the debit, so to = h keeps the
+ * mass); logs Transfer(h, to, q), also at q = 0 and at to = h (O5a);
+ * returns 1. */
 static void move(Asm *a, unsigned to, unsigned q) {
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_MU);
@@ -590,6 +635,10 @@ static void move(Asm *a, unsigned to, unsigned q) {
   settle(a);
   asm_argument(a, to);
   settle(a);
+  asm_load(a, MEM_ID);
+  asm_argument(a, to);
+  asm_argument(a, q);
+  move_vote(a);
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
@@ -762,9 +811,9 @@ static void attest(Asm *a, const EntryContext *c) {
 /* recover from to q (ERC-1644 forced transfer, O3): the issuer guard;
  * from = 0, to = 0, from + 1 or to + 1 overflow reverts; q > MU[from]
  * reverts; R does not
- * gate it; settle from, then settle to; MU[from] -= q, then MU[to] += q
- * (read after the debit, so to = from keeps the mass); logs
- * Transfer(from, to, q) (O5a); returns 1. */
+ * gate it; settle from, then settle to; the vote of q moves from from to
+ * to (O2); MU[from] -= q, then MU[to] += q (read after the debit, so
+ * to = from keeps the mass); logs Transfer(from, to, q) (O5a); returns 1. */
 static void recover(Asm *a, const EntryContext *c) {
   issuer_guard(a, c);
   for (unsigned j = 0; j < 2; j++) {
@@ -786,6 +835,10 @@ static void recover(Asm *a, const EntryContext *c) {
   settle(a);
   asm_argument(a, 1);
   settle(a);
+  asm_argument(a, 0);
+  asm_argument(a, 1);
+  asm_argument(a, 2);
+  move_vote(a);
   asm_argument(a, 0);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
@@ -811,10 +864,114 @@ static void recover(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
-/* amend b1 .. bn (amendState): CHARTER := the tally code; returns it. The
- * core amend (the packed table word) is not in the interest lists. */
+/* vote c (O2, MY CALLs 181 to 183): h = id(CALLER); c > k reverts; the
+ * mass MU[h] moves in WEIGHT from the old ballot BALLOT[h] to c (code 0:
+ * no term, so vote(0) withdraws the ballot); BALLOT[h] := c; returns c. */
+static void vote(Asm *a, const EntryContext *c) {
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  asm_push(a, c->decisions);
+  asm_argument(a, 0);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_BALLOT);
+  asm_op(a, OP_SLOAD);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_SLOAD);
+  weight_term(a, OP_SUB);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_SLOAD);
+  weight_term(a, OP_ADD);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_BALLOT);
+  asm_op(a, OP_SSTORE);
+  asm_argument(a, 0);
+  asm_return_top(a);
+}
+
+/* The amend scratch: the remainder of code j at MEM_SEAT + 32 (j - 1), its
+ * floor seats at MEM_SEAT + 32 (k + j - 1). */
+static unsigned remainder_at(unsigned j) { return MEM_SEAT + WORD * (j - 1); }
+
+static unsigned floor_at(unsigned k, unsigned j) { return MEM_SEAT + WORD * (k + j - 1); }
+
+/* amend() (O2, MY CALLs 184 and 185): the n = members seats of the
+ * weighted tally w = WEIGHT[1 .. k], W = the sum, by the largest remainder
+ * (Hamilton): code j gets floor(n w_j / W) seats, and the seats left go one
+ * each to the codes with the largest n w_j mod W, ties to the lower code
+ * (code j gets one when fewer than the seats left rank above it). W = 0
+ * reverts. The seat tally sums to n, so its table index (table_index:
+ * the sum of seats_j (n + 1)^(j - 1) over j < k) reads the verdict table
+ * of KL1 (asm_verdict). CHARTER := the code; returns it. n w_j < 2^75 (the
+ * KL4 range), so plain MUL. The core amend (the packed table word) is not
+ * in the interest lists. */
 static void amend(Asm *a, const EntryContext *c) {
-  asm_tally(a, 0, c->members, c->decisions);
+  unsigned n = c->members;
+  unsigned k = c->decisions;
+  asm_op(a, OP_PUSH0);
+  for (unsigned j = 1; j <= k; j++) {
+    asm_push(a, j);
+    asm_slot(a, SLOT_WEIGHT);
+    asm_op(a, OP_SLOAD);
+    asm_op(a, OP_DUP1);
+    asm_store(a, remainder_at(j));
+    asm_op(a, OP_ADD);
+  }
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, n);
+  for (unsigned j = 1; j <= k; j++) {
+    asm_load(a, remainder_at(j));
+    asm_push(a, n);
+    asm_op(a, OP_MUL);
+    asm_op(a, OP_DUP3);
+    asm_op(a, OP_DUP2);
+    asm_op(a, OP_MOD);
+    asm_store(a, remainder_at(j));
+    asm_op(a, OP_DUP3);
+    asm_op(a, OP_SWAP1);
+    asm_op(a, OP_DIV);
+    asm_op(a, OP_DUP1);
+    asm_store(a, floor_at(k, j));
+    asm_op(a, OP_SWAP1);
+    asm_op(a, OP_SUB);
+  }
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_POP);
+  asm_op(a, OP_PUSH0);
+  unsigned long weight = 1;
+  for (unsigned j = 1; j < k; j++, weight *= n + 1ul) {
+    asm_op(a, OP_PUSH0);
+    for (unsigned i = 1; i <= k; i++) {
+      if (i != j) {
+        asm_load(a, remainder_at(j));
+        asm_load(a, remainder_at(i));
+        asm_op(a, i < j ? OP_LT : OP_GT);
+        if (i < j)
+          asm_op(a, OP_ISZERO);
+        asm_op(a, OP_ADD);
+      }
+    }
+    asm_op(a, OP_DUP3);
+    asm_op(a, OP_SWAP1);
+    asm_op(a, OP_LT);
+    asm_load(a, floor_at(k, j));
+    asm_op(a, OP_ADD);
+    if (j > 1) {
+      asm_push(a, weight);
+      asm_op(a, OP_MUL);
+    }
+    asm_op(a, OP_ADD);
+  }
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_POP);
+  asm_verdict(a, n, k);
   asm_op(a, OP_DUP1);
   asm_push(a, SLOT_CHARTER);
   asm_op(a, OP_SSTORE);
@@ -941,7 +1098,7 @@ static const Entry debreu[] = {
   {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
   {"recover", 3, 0, ENTRY_NONPAYABLE, recover, NULL},
   {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast, NULL},
-  {"amend", 0, 1, ENTRY_NONPAYABLE, amend, NULL},
+  {"amend", 0, 0, ENTRY_NONPAYABLE, amend, NULL},
   {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
   {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
   {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
@@ -957,6 +1114,7 @@ static const Entry debreu[] = {
   {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
   {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
   {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
+  {"vote", 1, 0, ENTRY_NONPAYABLE, vote, NULL},
 };
 
 /* Token mode (O5b): the same rows, but deposit takes kind and a (not
@@ -986,7 +1144,7 @@ static const Entry debreu_token[] = {
   {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
   {"recover", 3, 0, ENTRY_NONPAYABLE, recover, NULL},
   {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast, NULL},
-  {"amend", 0, 1, ENTRY_NONPAYABLE, amend, NULL},
+  {"amend", 0, 0, ENTRY_NONPAYABLE, amend, NULL},
   {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
   {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
   {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
@@ -1002,6 +1160,7 @@ static const Entry debreu_token[] = {
   {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
   {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
   {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
+  {"vote", 1, 0, ENTRY_NONPAYABLE, vote, NULL},
 };
 
 /* The table of REGIME: the token table when the program data selects the

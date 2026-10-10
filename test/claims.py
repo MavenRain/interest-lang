@@ -30,12 +30,12 @@ import subprocess
 import sys
 
 import settlement as st
-from settlement import (ALLOWANCE, CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY,
-                        RESERVE, SENDER, data, require, run, slot, vector_index, wallet)
+from settlement import (ALLOWANCE, BALLOT, CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY,
+                        RESERVE, SENDER, WEIGHT, data, require, run, slot, vector_index, wallet)
 
 WORD = 2**256
 BASE = 10**24
-WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=3, cast=3, amend=3,
+WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=3, cast=3, amend=0, vote=1,
              mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0, balanceOf=1, totalSupply=0)
 FACADE = ('balanceOf', 'totalSupply')
 VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting') + FACADE
@@ -102,7 +102,7 @@ class Program:
 DEBREU = Program(
     'debreu', st.DEBREU, 2, ((4096, 1, 0, 5), (4097, 2, 3, 3), (4098, 2, 3, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
-    ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'mass',
+    ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'vote', 'mass',
      'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1,
     erc20_name='Arrow-Debreu', erc20_symbol='AD')
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
@@ -130,7 +130,8 @@ class State:
     """BALANCE is the asset balance of the contract: wei, or carrier units in token mode.
     In token mode CARRIER is the carrier address and TOKEN the carrier storage words of
     the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None.
-    ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c)."""
+    ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c). BALLOT maps an
+    identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2)."""
     mu: dict
     registry: dict
     profile: dict
@@ -144,6 +145,8 @@ class State:
     carrier: int = 0
     token: dict = None
     allowance: dict = dataclasses.field(default_factory=dict)
+    ballot: dict = dataclasses.field(default_factory=dict)
+    weight: dict = dataclasses.field(default_factory=dict)
 
 
 def genesis(program):
@@ -167,7 +170,9 @@ def storage(s):
              **{slot(RESERVE, k): r for k, r in enumerate(s.reserve)},
              **{slot(CHECKPOINT, h): c for h, c in s.checkpoint.items()},
              **{slot(NUM, h): n for h, n in s.num.items()},
-             **{allowance_word(o, p): v for (o, p), v in s.allowance.items()}}
+             **{allowance_word(o, p): v for (o, p), v in s.allowance.items()},
+             **{slot(BALLOT, h): c for h, c in s.ballot.items()},
+             **{slot(WEIGHT, c): w for c, w in s.weight.items()}}
     return {key: value for key, value in words.items() if value}
 
 
@@ -297,13 +302,15 @@ def allowance_view(program, s, sender, value, o, p):
 
 
 def move(s, h, to, q):
-    """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu)."""
+    """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
+    vote of q moves from the ballot of h to the ballot of to (O2)."""
     first = settle(s, h)
     second = None if first is None else settle(first, to)
     if second is None:
         return None
     debited = {**second.mu, h: second.mu.get(h, 0) - q}
-    return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}), 1
+    weight = shift(second.weight, second.ballot.get(h, 0), second.ballot.get(to, 0), q)
+    return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight), 1
 
 
 def issuer(program, s, sender):
@@ -333,9 +340,38 @@ def cast(program, s, sender, value, *ballots):
     return None if v is None else (s, v)
 
 
-def amend(program, s, sender, value, *ballots):
-    """Active charter := the verdict; mu and the treasury do not move."""
-    v = verdict(program, ballots)
+def shift(weight, old, new, q):
+    """WEIGHT after the vote of mass q moves from code OLD to code NEW (code 0: no term) (O2)."""
+    debited = {**weight, old: weight.get(old, 0) - q} if old else weight
+    return {**debited, new: debited.get(new, 0) + q} if new else debited
+
+
+def vote(program, s, sender, value, c):
+    """vote(c) (O2): the mass of h = id(caller) moves in WEIGHT from BALLOT[h] to c (vote(0)
+    withdraws the ballot); BALLOT[h] := c; no identity and c > k revert."""
+    h = identity(s, sender)
+    if h is None or c > 3:
+        return None
+    weight = shift(s.weight, s.ballot.get(h, 0), c, s.mu.get(h, 0))
+    return dataclasses.replace(s, ballot={**s.ballot, h: c}, weight=weight), c
+
+
+def seats(weight):
+    """The seats of the 3 members by the largest remainder of w = WEIGHT[1 .. 3], ties to the
+    lower code (O2); None when W = 0."""
+    w = tuple(weight.get(c, 0) for c in (1, 2, 3))
+    if sum(w) == 0:
+        return None
+    floors, rests = zip(*(divmod(3 * x, sum(w)) for x in w))
+    rank = sorted(range(3), key=lambda j: -rests[j])
+    return tuple(f + int(rank.index(j) < 3 - sum(floors)) for j, f in enumerate(floors))
+
+
+def amend(program, s, sender, value):
+    """amend() (O2): active charter := the verdict of the seat vector; W = 0 reverts; mu, the
+    ballots and the treasury do not move."""
+    held = seats(s.weight)
+    v = None if held is None else verdict(program, tuple(c for c, n in zip((1, 2, 3), held) for _ in range(n)))
     return None if v is None else (dataclasses.replace(s, charter=v), v)
 
 
@@ -351,8 +387,8 @@ def view(name):
 
 
 OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=transfer,
-           attest=attest, recover=recover, cast=cast, amend=amend, erc20Transfer=erc20_transfer, approve=approve,
-           transferFrom=transfer_from, allowance=allowance_view, **{name: view(name) for name in VIEWS})
+           attest=attest, recover=recover, cast=cast, amend=amend, vote=vote, erc20Transfer=erc20_transfer,
+           approve=approve, transferFrom=transfer_from, allowance=allowance_view, **{name: view(name) for name in VIEWS})
 
 
 def apply(program, s, call):
@@ -482,6 +518,13 @@ def random_call(rng, args, payable=True, choices=CHOICES):
     return name, args[name](rng), rng.choice(SENDERS), value
 
 
+def calls_of(call):
+    """The calls of a drawn CALL: an amend draw (b1, b2, b3) is vote(b1) by its sender, then
+    amend() (MY CALL 190 (a)); any other draw is one call."""
+    name, args, sender, value = call
+    return [('vote', args[:1], sender, value), ('amend', (), sender, value)] if name == 'amend' else [call]
+
+
 def sequence(program, runtime, seed, length, args, choices=CHOICES):
     """LENGTH random calls from the genesis of PROGRAM; -> the final model state and the
     successful calls seen (name + '+' for a nonzero result, name + '0' for zero). After each
@@ -490,8 +533,9 @@ def sequence(program, runtime, seed, length, args, choices=CHOICES):
     rng, s, seen, pairs = random.Random(seed), genesis(program), set(), set()
     measure = fold({}, [st.transfer_log(0, h, u) for h, u in st.data_logs(program.path)], minted=True)
     chain, deposits, paid, recycled = at(s), 0, 0, 0
-    for number in range(length):
-        label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args, not program.token, choices)
+    calls = [step for _ in range(length) for step in calls_of(random_call(rng, args, not program.token, choices))]
+    for number, call in enumerate(calls):
+        label = f'{program.name}-seq{seed}-{number}'
         model = apply(program, s, call)
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
         if call[0] == 'transfer' and call[1][0] == 0 and model is None:
@@ -604,14 +648,19 @@ def transfer_then_distribute(program, runtime):
 
 
 def amend_law(program, runtime):
-    """At a rich state, every ballot vector: storage changes only at CHARTER, wei stays."""
-    s, count = rich_debreu(program), 0
+    """At a rich state, identity 1 (mass 3) votes b1 and identity 2 (mass 7) votes b2, for each
+    (b1, b2); then amend() changes storage only at CHARTER, the wei stays, and the charter is the
+    verdict of (b1, b2, b2) (O2: the largest remainder gives b1 1 seat and b2 2 seats)."""
+    base, count = rich_debreu(program), 0
     rest = lambda words: {key: value for key, value in words.items() if key != CHARTER}
-    for ballots in itertools.product((1, 2, 3), repeat=3):
-        after, chain = check_step(f'law-amend-{"".join(map(str, ballots))}', program, runtime, s, at(s),
-                                  ('amend', ballots, SENDER, 0))
-        require(rest(chain[0]) == rest(storage(s)) and chain[1] == s.balance and after.charter == verdict(program, ballots),
-                f'law-amend {ballots}: amend moved mu or the treasury')
+    for ballots in itertools.product((1, 2, 3), repeat=2):
+        label, s, chain = f'law-amend-{"".join(map(str, ballots))}', base, at(base)
+        for h, (b, sender) in enumerate(zip(ballots, (wallet(4096), wallet(4097))), 1):
+            s, chain = check_step(f'{label}-vote-{h}', program, runtime, s, chain, ('vote', (b,), sender, 0))
+        after, moved = check_step(label, program, runtime, s, chain, ('amend', (), SENDER, 0))
+        require(rest(moved[0]) == rest(chain[0]) and moved[1] == chain[1]
+                and after.charter == verdict(program, (ballots[0],) + (ballots[1],) * 2),
+                f'law-amend {ballots}: amend moved a word other than the charter')
         count += 1
     return count
 
@@ -638,13 +687,13 @@ def recover_law(program, runtime):
 
 
 def impossibility_reverts(program, runtime):
-    """At impossibility the aggregation has no inhabitant: cast, amend, distribute,
+    """At impossibility the aggregation has no inhabitant: cast, vote, amend, distribute,
     transfer and recover revert with empty output, and the storage and the wei do not
     change."""
     one = wallet(4096)
     s = play(program, genesis(program), [('deposit', (0,), SENDER, 7), ('deposit', (1,), one, 3),
                                          ('attest', (4099, 3, 2), one, 0), ('withdraw', (), one, 0)])
-    calls = (('cast', (1, 1, 1), one, 0), ('amend', (1, 1, 1), one, 0), ('amend', (3, 3, 3), SENDER, 0),
+    calls = (('cast', (1, 1, 1), one, 0), ('vote', (1,), one, 0), ('amend', (), SENDER, 0),
              ('distribute', (0,), one, 0), ('distribute', (1,), SENDER, 0), ('transfer', (2, 0), one, 0),
              ('transfer', (2, 1), one, 0), ('recover', (1, 2, 1), one, 0))
     for number, call in enumerate(calls):
@@ -772,11 +821,12 @@ def dirac_vectors(program, runtime):
     restricted charter admits an accredited receiver only, and withdraw keeps no remainder."""
     one, two = wallet(4096), wallet(4097)
     calls = (('deposit', (0,), SENDER, 9, 9), ('distribute', (0,), SENDER, 0, 9), ('claimOf', (1,), SENDER, 0, 9),
-             ('transfer', (2, 2), one, 0, None), ('cast', (2, 3, 2), SENDER, 0, 3), ('amend', (2, 2, 1), SENDER, 0, 2),
-             ('transfer', (3, 1), one, 0, None), ('transfer', (2, 1), one, 0, 1), ('transfer', (1, 1), two, 0, None),
-             ('deposit', (1,), SENDER, 4, 4), ('distribute', (1,), SENDER, 0, 4), ('claimOf', (2,), SENDER, 0, 4),
-             ('withdraw', (), one, 0, 9), ('withdraw', (), two, 0, 4), ('amend', (1, 1, 3), SENDER, 0, 3),
-             ('transfer', (1, 1), two, 0, None), ('deposit', (0,), SENDER, 5, 5), ('distribute', (0,), SENDER, 0, 0))
+             ('transfer', (2, 2), one, 0, None), ('cast', (2, 3, 2), SENDER, 0, 3), ('vote', (2,), one, 0, 2),
+             ('amend', (), SENDER, 0, 2), ('transfer', (3, 1), one, 0, None), ('transfer', (2, 1), one, 0, 1),
+             ('transfer', (1, 1), two, 0, None), ('deposit', (1,), SENDER, 4, 4), ('distribute', (1,), SENDER, 0, 4),
+             ('claimOf', (2,), SENDER, 0, 4), ('withdraw', (), one, 0, 9), ('withdraw', (), two, 0, 4),
+             ('vote', (3,), two, 0, 3), ('amend', (), SENDER, 0, 3), ('transfer', (1, 1), two, 0, None),
+             ('deposit', (0,), SENDER, 5, 5), ('distribute', (0,), SENDER, 0, 0))
     s, chain = genesis(program), at(genesis(program))
     for number, (name, args, sender, value, want) in enumerate(calls):
         call = (name, args, sender, value)
