@@ -79,8 +79,8 @@ types of section 4, the operations of section 5 and the formers of section
 - a payout by floor division outside `withdraw`;
 - document-hash data that changes W or R.
 
-The compiler writes the ERC-20 facade (section 7): the views,
-`transfer(address,uint256)`, and, at Debreu, the allowance surface
+The compiler writes the ERC-20 facade (section 7): the views and, at
+Debreu, `transfer(address,uint256)` and the allowance surface
 `approve`, `allowance` and `transferFrom` (O5c). A program cannot add to
 it.
 
@@ -183,6 +183,8 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | Operation | Type | Meaning (design section "Operations are homomorphisms") |
 |---|---|---|
 | `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `k > 0`, `R(h, k, q)` and `q <= mass h`; otherwise `none` (identity 0 is no identity, O5b). Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
+| `approve o p v A` | `Allowance` | O5c. `Allowance := Identity -> Identity -> Nat` is outside InterestState, as the registry is: `A f p` is the count of units of `f` that the spender `p` can move. `approve` sets `A o p` to `v`, and no other allowance changes. The state does not change. The contract also reverts when `o` or `p` is 0 (section 7, Guards). Laws: `approveSets`, `approveOther` |
+| `transferFrom p f k q s A` | `Option (prod (Allowance, InterestState))` | O5c. `none` when `A f p < q`; else `transfer f k q s` with `A f p` := `A f p - q`, and `none` when that transfer is `none`. The spender needs an allowance also when `p = f`. Thus `transfer` stays the only write to `mu`. Laws: `transferFromMoves` (the move of `transfer` by `f`), `transferFromAllowance` (the allowance falls by q), `transferFromOver` (q above the allowance: `none`), `transferFromRestricted` (R refuses: `none` with an allowance) |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
 | `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` asset units. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance >= sum of the claims + dust + S * (reserve[rent] + reserve[sale])`, where `balance` is the asset balance of the contract (the wei balance, or `balanceOf(this)` of the carrier); the two sides are equal when no direct transfer adds to the balance |
@@ -195,6 +197,12 @@ Transfer then distribute: the claim travels with the token. Before a
 transfer moves `mu`, the contract checkpoints both identities: it settles
 their accrued numerators. Thus a later distribution reads the image measure,
 and transfer then distribute equals distribute on the image measure.
+
+The allowance (O5c) is the prelude type `Allowance`.
+`examples/arrow-debreu.lang` checks its 6 laws as equalities (`EqNat`):
+`approveSets`, `approveOther`, `transferFromMoves`,
+`transferFromAllowance`, `transferFromOver` and `transferFromRestricted`.
+A wrong value in a law gives TYPE_MISMATCH.
 
 ## 6. Regimes
 
@@ -343,7 +351,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events. O5a (2026-10-09): the read facade and the `Transfer`
   event. O5b (2026-10-09): the ERC-20 asset carrier (R3 re-ruled,
-  section 4). Open: the write facade, O5c.
+  section 4). O5c (2026-10-09): the write facade. Open: the ERC-721 ABI,
+  O5d.
 - O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
   program gives the genesis charter, and it can be any declared charter.
   `examples/arrow-debreu.lang` has `start restricted`, the second declared
@@ -409,8 +418,14 @@ domain tests 11, settlement 213 cases with 9 deploys (218 EVM calls under
 the gas ceiling of `test/gas-baseline.txt`), claims 20 sequences (530
 steps), 100 law calls and 87 contract checks, and a token run of 10
 sequences (200 steps), 0 failures
-(`docs/VALIDATION.md`). The kit debt of `docs/KIT-DEBT.md` is
-applied in lang-template `fa1131a`, and `a2ce1b8` is the first commit of
+(`docs/VALIDATION.md`). After O5c (2026-10-09), `make check` passes with
+parse 28, check 61, build output 29, EVM boundaries 4, metadata 56 ABI
+comparisons, refusal 49, normal forms 10, differential 27 and 64 vectors,
+domain tests 11, settlement 240 cases with 9 deploys (245 EVM calls under
+the gas ceiling), the same claims and token runs, and an allowance run of
+10 sequences (200 steps) with 27 law calls, 0 failures. The kit debt of
+`docs/KIT-DEBT.md` is applied in lang-template `fa1131a`, and `a2ce1b8`
+is the first commit of
 this tree. I6 removed the two differences from the kit that
 `docs/KIT-DEBT.md` records: the program data uses the kit hooks
 `lang_domain_read` and `lang_domain_print`, and a failed write to stdout

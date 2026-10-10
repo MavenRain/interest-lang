@@ -87,12 +87,11 @@ milestone of SPEC section 10 is open.
   `evm run` does not charge the intrinsic gas of a transaction, and
   `test/claims.py` has no gas check. Each settlement call must not use more
   gas than its line in `test/gas-baseline.txt`.
-- The ERC-20 facade is read only. SPEC section 2 refuses `allowance`,
-  `approve` and `transferFrom`, and the contract has no `name`, `symbol` or
-  `decimals`. The account of the facade is the identity: `balanceOf` reads
-  MU, so a wallet reads its mass only at the address of its identity. The
-  ERC-721 example has the ERC-20 facade, not the ERC-721 ABI (`ownerOf`,
-  the `Transfer` event with an indexed token id).
+- The account of the ERC-20 facade is the identity: every `address`
+  argument is an identity word below 2^160, so a wallet reads its mass and
+  gives an allowance at the address of its identity. `approve` sets the
+  allowance (the EIP-20 front-run risk: set 0 first). The ERC-721 example
+  has the ERC-20 facade, not the ERC-721 ABI (O5d).
 - The carrier must be a standard ERC-20: no fee on transfer and no
   rebase. `deposit` reverts when the balance of the contract does not grow
   by exactly a, and a rebase changes the balance without an entry call.

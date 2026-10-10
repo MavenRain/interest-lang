@@ -88,6 +88,32 @@ def transferFrozen : EqNat (mass (stateOr s1 (transfer restrict prof 1 2 2 sFroz
 -- identity 0 at mass 0.
 def transferNoIdentity : EqNat (mass (stateOr s1 (transfer restrict prof 1 0 2 s0 e2)).0 0) 0 := reflNat 0
 
+-- approve sets the allowance of spender 3 over the units of identity 1 to
+-- 5; no other allowance changes.
+def al0 : Allowance := approve 1 3 5 (fun (f : Identity) (g : Identity) => 0)
+def approveSets : EqNat (al0 1 3) 5 := reflNat 5
+def approveOther : EqNat (natAdd (al0 1 2) (al0 3 1)) 0 := reflNat 0
+
+-- transferFrom: spender 3 moves 2 units of identity 1 to identity 2.  The
+-- move is the move of transfer, and the allowance falls from 5 to 3.  The
+-- fallback f0 keeps mass 0 at identity 2 and the allowance 5.
+def fromOr : prod (Allowance, InterestState) -> Option (prod (Allowance, InterestState)) -> prod (Allowance, InterestState) :=
+  fun (d : prod (Allowance, InterestState)) (o : Option (prod (Allowance, InterestState))) =>
+    case o with
+    | 0 (u : prod ()) => d
+    | 1 (t : prod (Allowance, InterestState)) => t
+def f0 : prod (Allowance, InterestState) := tuple (al0, s0)
+def f1 : prod (Allowance, InterestState) := fromOr f0 (transferFrom restrict prof 3 1 2 2 s0 al0 e2)
+def transferFromMoves : EqNat (mass f1.1.0 2) (mass s1.0 2) := reflNat 2
+def transferFromAllowance : EqNat (f1.0 1 3) 3 := reflNat 3
+
+-- transferFrom over the allowance (1 < 2) is none.
+def transferFromOver : EqNat (mass (fromOr f0 (transferFrom restrict prof 3 1 2 2 s0 (approve 1 3 1 al0) e2)).1.0 2) 0 := reflNat 0
+
+-- transferFrom is none when transfer is none: the frozen charter refuses
+-- the move, also with an allowance.
+def transferFromRestricted : EqNat (mass (fromOr f0 (transferFrom restrict prof 3 1 2 2 sFrozen al0 e2)).1.0 2) 0 := reflNat 0
+
 -- deposit, then amend: the charter becomes `gov F agg y` = open; the mass
 -- and the treasury do not change.
 def s2 : InterestState := deposit rent 7 s1

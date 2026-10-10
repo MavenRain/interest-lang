@@ -459,6 +459,36 @@ def transfer : (R : Charter -> Restriction) -> (P : Profiles) -> (h : Identity) 
       | 0 (v : prod ()) => pureOption InterestState (tuple (credit (debit s.0 h q e) k q, s.1))
       | 1 (v : prod ()) => none InterestState
 
+-- `Allowance` (O5c, SPEC section 5): `A f p` is the count of units of `f`
+-- that the spender `p` can move.  The allowance is outside InterestState,
+-- as the registry is.  `approve o p v A` sets the allowance of `p` over
+-- the units of `o` to `v`; no other allowance changes.  The contract also
+-- reverts when `o` or `p` is 0 (SPEC section 7, Guards).
+def Allowance : Type 0 := Identity -> Identity -> Nat
+
+def approve : Identity -> Identity -> Nat -> Allowance -> Allowance :=
+  fun (o : Identity) (p : Identity) (v : Nat) (A : Allowance) (f : Identity) (g : Identity) =>
+    case natEq f o with
+    | 0 (u : prod ()) => A f g
+    | 1 (u : prod ()) =>
+      case natEq g p with
+      | 0 (w : prod ()) => A f g
+      | 1 (w : prod ()) => v
+
+-- `transferFrom R P p f k q s A e`: the spender `p` moves q units from f
+-- to k.  It is none when the allowance `A f p` is below q, else it is
+-- `transfer R P f k q s e` with the allowance `A f p` decreased by q.  It
+-- is none when that transfer is none.  The spender needs an allowance
+-- also when p = f.
+def transferFrom : (R : Charter -> Restriction) -> (P : Profiles) -> (p : Identity) -> (f : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (A : Allowance) -> (0 e : Le q (mass s.0 f)) -> Option (prod (Allowance, InterestState)) :=
+  fun (R : Charter -> Restriction) (P : Profiles) (p : Identity) (f : Identity) (k : Identity) (q : Nat) (s : InterestState) (A : Allowance) (0 e : Le q (mass s.0 f)) =>
+    case natLt (A f p) q with
+    | 0 (u : prod ()) =>
+      mapOption InterestState (prod (Allowance, InterestState))
+        (fun (t : InterestState) => tuple (approve f p (natSub (A f p) q) A, t))
+        (transfer R P f k q s e)
+    | 1 (u : prod ()) => none (prod (Allowance, InterestState))
+
 -- `deposit i a s`: the reserve of kind `i` grows by `a`.  The measure and
 -- the charter do not change.
 def deposit : Kind -> Nat -> InterestState -> InterestState :=

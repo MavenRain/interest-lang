@@ -122,6 +122,25 @@ that alias the source file, including hard links and symlinks
     assembler and resolves their label sites with its own copy of the
     8-line `resolve` of `src/evm.c`, because the core does not export it.
 
+## ERC-20 write facade (slice O5c)
+
+12. Status 2026-10-09: not in lang-template. Slice O5c (MY CALL 169 (b))
+    adds text to the program data. The prelude has `mu Text := end | char
+    Nat Text` (bytes). `lang_data` (`src/check.c`) reads the optional defs
+    `name : Text` and `symbol : Text` with `data_text`: each byte 32 ..
+    126, at most `LANG_TEXT_MAX` (32) bytes, else CONTRACT_VALUE. Absent
+    defs give `name` = "interest" and `symbol` = "INT"
+    (`LANG_NAME_DEFAULT`, `LANG_SYMBOL_DEFAULT`, `domain/data.h`). The
+    string return (`return_text`) is domain code in `domain/entries.c` and
+    needs no change to `src/`.
+
+13. Status 2026-10-09: not in lang-template. Slice O5c has two other core
+    changes. `EVM_ENTRIES` (`src/evm.c`) is 24, because the Debreu tables
+    list 20 entries; lang-template `hosts/tcc-evm-dao/src/evm.c` keeps 16.
+    The `Makefile` builds `build/metadata` from `test/metadata.c` with
+    tcc, `check-clang` compiles `test/metadata.c`, and `check` runs it
+    (`test/gate.sh`). The kit has no metadata test.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit

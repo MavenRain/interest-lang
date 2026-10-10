@@ -6,18 +6,19 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `make` from this tree (the tree has commits). Host kit: lang-template
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
-`make check` passes after slice O5b. It builds `build/interestc`,
-`build/parsetool`, `build/evm-boundaries` and the three test-domain
-compilers with tcc, compiles the sources and the test tools with the C
+`make check` passes after slice O5c. It builds `build/interestc`,
+`build/parsetool`, `build/evm-boundaries`, `build/metadata` and the three
+test-domain compilers with tcc, compiles the sources and the test tools with the C
 compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
-gate runs these steps: parse 28 round trips, embed-safety, check 58 cases,
-build output 29 checks, EVM signature boundaries 4 checks, refusal 49
-cases, normal forms 10, the differential test (27 vectors at k = 3),
+gate runs these steps: parse 28 round trips, embed-safety, check 61 cases,
+build output 29 checks, EVM signature boundaries 4 checks, metadata 56
+ABI comparisons, refusal 49 cases, normal forms 10, the differential test (27 vectors at k = 3),
 domain tests 11, the differential test of the k = 4 domain (64 vectors),
-settlement 213 cases with 9 deploys and a gas ceiling on their 218 EVM
+settlement 240 cases with 9 deploys and a gas ceiling on their 245 EVM
 calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 530
-steps, 100 law calls, 87 contract checks, and a token run of 10
-sequences totaling 200 steps).
+steps, 100 law calls, 87 contract checks, a token run of 10 sequences
+totaling 200 steps, and an allowance run of 10 sequences totaling 200
+steps with 27 law calls).
 Then it looks for an em-dash or an en-dash in the kit. The result is
 `gate: 0 failures`. The original I5 gate took 85 seconds of wall time,
 with `make clean`.
@@ -210,6 +211,36 @@ native steps in total. One mutant makes the gate fail: a
 is none at `h = 0` too, and `examples/arrow-debreu.lang` checks the law
 `attestNoIdentity`; a mutant `attest` without this guard fails the
 check of `attestNoIdentity`.
+
+In slice O5c, the ERC-20 facade became a write facade. The Debreu tables
+have 7 new entries: `transfer(address,uint256)`, `approve`, `allowance`,
+`transferFrom`, `name`, `symbol` and `decimals`. The impossibility table
+has the 3 metadata entries. The allowance mapping is at slot 10.
+`test/settlement.py` has 27 new cases (21 for the allowance entries and
+the ERC-20 `transfer`, 6 for the metadata), so its cases went to 240
+(deploy 9) and the gas ceiling to 245 calls. Old gas lines rose in two
+classes only, and no line went down: the deploys (the code deposit of the
+new runtime bytes) and the unknown-selector reverts (22 gas for each new
+row of the table). `test/check.sh` has 3 new rows for the `Text` defs
+(check went from 58 to 61), and `build/metadata` (`test/metadata.c`) makes
+56 ABI comparisons. The language has the type `Allowance`, `approve` and
+`transferFrom` (SPEC section 5), and `examples/arrow-debreu.lang` checks 6
+laws: `approveSets`, `approveOther`, `transferFromMoves`,
+`transferFromAllowance`, `transferFromOver` and `transferFromRestricted`.
+A probe with a wrong value (`transferFromAllowance` with 5 in place of 3)
+fails the check with TYPE_MISMATCH. `test/claims.py` has an allowance run:
+10 sequences of 20 steps (seeds 201 to 210) that draw `approve`,
+`transferFrom`, the ERC-20 `transfer` and `allowance` with the Debreu
+operations. Each sequence ends with `allowance(owner, spender)` for the
+drawn pairs. Its 27 law calls (9 vectors of `approve`, `transfer` by the
+owner and `transferFrom` by the spender) check that `approve` changes only
+the allowance word, that `transferFrom` is `transfer` by the owner with
+the allowance decreased by q, and that a call over the allowance, over the
+mass, refused by R or to 0 reverts with no change. The main and token runs
+did not change. Two mutants make the gate fail: a `transferFrom` without
+the allowance store (`example-debreu-transferfrom` fails first), and a
+`transferFrom` without the R check
+(`example-debreu-transferfrom-restricted` fails first).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses

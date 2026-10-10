@@ -16,6 +16,10 @@ half of the refusal list (no mint, burn, balanceOf, allowance, charter-write or
 issuer-write selector; a withdraw that pays moves num mod S to the dust). One more run
 uses the Debreu tables in token mode (O5b): the model keeps the carrier balance and the
 allowance of each sender, and the solvency law holds in carrier units after each call.
+A third run uses the Debreu tables with the write facade (O5c): the model keeps the allowance
+of each (owner, spender) identity pair, and each sequence ends with allowance(o, p) for the
+drawn pairs. Then the allowance laws on geth: approve changes only the allowance word, and
+transferFrom by the spender is transfer by from, less q of the allowance, or a revert.
 Uses the harness of settlement.py."""
 import dataclasses
 import functools
@@ -26,8 +30,8 @@ import subprocess
 import sys
 
 import settlement as st
-from settlement import (CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY, RESERVE,
-                        SENDER, data, require, run, slot, vector_index, wallet)
+from settlement import (ALLOWANCE, CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY,
+                        RESERVE, SENDER, data, require, run, slot, vector_index, wallet)
 
 WORD = 2**256
 BASE = 10**24
@@ -116,13 +120,17 @@ ERC721 = Program(
 # `name` or `symbol` def (the defaults, O5c).
 DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True,
                                    erc20_name='interest', erc20_symbol='INT')
+# The allowance run (O5c B3, MY CALL 171): the Debreu tables, and the write facade as model entries.
+DEBREU_ALLOWANCE = dataclasses.replace(DEBREU, name='debreu-allowance', entries=DEBREU.entries + (
+    'erc20Transfer', 'approve', 'transferFrom', 'allowance'))
 
 
 @dataclasses.dataclass(frozen=True)
 class State:
     """BALANCE is the asset balance of the contract: wei, or carrier units in token mode.
     In token mode CARRIER is the carrier address and TOKEN the carrier storage words of
-    the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None."""
+    the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None.
+    ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c)."""
     mu: dict
     registry: dict
     profile: dict
@@ -135,6 +143,7 @@ class State:
     dust: int = 0
     carrier: int = 0
     token: dict = None
+    allowance: dict = dataclasses.field(default_factory=dict)
 
 
 def genesis(program):
@@ -157,8 +166,15 @@ def storage(s):
              **{slot(PROFILE, h): p for h, p in s.profile.items()},
              **{slot(RESERVE, k): r for k, r in enumerate(s.reserve)},
              **{slot(CHECKPOINT, h): c for h, c in s.checkpoint.items()},
-             **{slot(NUM, h): n for h, n in s.num.items()}}
+             **{slot(NUM, h): n for h, n in s.num.items()},
+             **{allowance_word(o, p): v for (o, p), v in s.allowance.items()}}
     return {key: value for key, value in words.items() if value}
+
+
+@functools.cache
+def allowance_word(owner, spender):
+    """The slot of ALLOWANCE[OWNER][SPENDER]: keccak256(spender . keccak256(owner . ALLOWANCE))."""
+    return slot(slot(ALLOWANCE, owner), spender)
 
 
 def identity(s, sender):
@@ -238,10 +254,46 @@ def transfer(program, s, sender, value, to, q):
     """Settles both identities, then debit h q ; credit to q, iff to > 0 (MY CALL 150),
     R(h, to, q) and q <= mass h."""
     h = identity(s, sender)
-    code = None if h is None else program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
-    if h is None or to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
+    return None if h is None else send(program, s, h, to, q)
+
+
+def send(program, s, h, to, q):
+    """The move of transfer by identity h: iff to > 0, R(h, to, q) and q <= mass h."""
+    code = program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
+    if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
         return None
     return move(s, h, to, q)
+
+
+def erc20_transfer(program, s, sender, value, to, q):
+    """transfer(address to, uint256 q) of the ERC-20 facade (O5c): to >= 2^160 reverts, then transfer."""
+    return None if to >= 2**160 else transfer(program, s, sender, value, to, q)
+
+
+def approve(program, s, sender, value, spender, v):
+    """approve(spender, v) (O5c): ALLOWANCE[id(caller)][spender] := v; spender = 0 or
+    spender >= 2^160 reverts."""
+    o = identity(s, sender)
+    if o is None or spender == 0 or spender >= 2**160:
+        return None
+    return dataclasses.replace(s, allowance={**s.allowance, (o, spender): v}), 1
+
+
+def transfer_from(program, s, sender, value, h, to, q):
+    """transferFrom(from, to, q) (O5c): from or to >= 2^160 and from = 0 revert; q above
+    ALLOWANCE[from][id(caller)] reverts; else the move of transfer by from, and the allowance
+    falls by q."""
+    p = identity(s, sender)
+    left = None if p is None else s.allowance.get((h, p), 0) - q
+    if left is None or left < 0 or h == 0 or h >= 2**160 or to >= 2**160:
+        return None
+    moved = send(program, s, h, to, q)
+    return None if moved is None else (dataclasses.replace(moved[0], allowance={**s.allowance, (h, p): left}), 1)
+
+
+def allowance_view(program, s, sender, value, o, p):
+    """allowance(owner, spender) (O5c): an argument >= 2^160 reverts; else ALLOWANCE[o][p]."""
+    return None if max(o, p) >= 2**160 else (s, s.allowance.get((o, p), 0))
 
 
 def move(s, h, to, q):
@@ -299,7 +351,8 @@ def view(name):
 
 
 OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=transfer,
-           attest=attest, recover=recover, cast=cast, amend=amend, **{name: view(name) for name in VIEWS})
+           attest=attest, recover=recover, cast=cast, amend=amend, erc20Transfer=erc20_transfer, approve=approve,
+           transferFrom=transfer_from, allowance=allowance_view, **{name: view(name) for name in VIEWS})
 
 
 def apply(program, s, call):
@@ -347,12 +400,16 @@ def check_step(label, program, runtime, s, chain, call):
 
 def records(program, s, call, model):
     """The records of CALL from S: a successful transfer logs Transfer(h, to, q) and a
-    successful recover logs Transfer(from, to, q) (O5a); a successful withdraw logs
-    Paid(h, wallet, paid, moved) (O11); a revert or any other entry logs none."""
+    successful recover logs Transfer(from, to, q) (O5a); the ERC-20 transfer and transferFrom
+    log as transfer and recover, and approve logs Approval(owner, spender, v) (O5c); a successful
+    withdraw logs Paid(h, wallet, paid, moved) (O11); a revert or any other entry logs none."""
     name, args, sender, value = call
-    moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q))
+    moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q),
+                 erc20Transfer=lambda to, q: (identity(s, sender), to, q), transferFrom=lambda h, to, q: (h, to, q))
     if model and name in moves:
         return [st.transfer_log(*moves[name](*args))]
+    if model and name == 'approve':
+        return [st.approval_log(identity(s, sender), *args)]
     if model and name == 'withdraw':
         h = identity(s, sender)
         paid, kept = divmod(settle(s, h).num[h], program.supply)
@@ -407,27 +464,41 @@ TOKEN_ARGS = dict(ARGS, deposit=lambda r: (r.choice((0, 0, 1, 1, 2)), r.randrang
 TOKEN_SEEDS, TOKEN_LENGTH = range(1, 11), 20
 COVER_TOKEN = {'deposit+', 'distribute+', 'distribute0', 'withdraw+', 'withdraw0', 'transfer+', 'claimOf+',
                'transfer-to-zero-revert'}
+# The allowance run (O5c B3, MY CALL 171): its own seeds, the Debreu draws and the write facade.
+# Identity 1 (3 wallets) mostly approves identity 2, and identity 2 (2 wallets) mostly spends
+# from identity 1, so the sequences reach a transferFrom that moves units.
+ALLOWANCE_ARGS = dict(ARGS, erc20Transfer=ARGS['transfer'],
+                      approve=lambda r: (r.choice((0, 1, 2, 2, 2)), r.randrange(0, 8)),
+                      transferFrom=lambda r: (r.choice((0, 1, 1, 1, 2)), r.randrange(0, 5), r.randrange(0, 6)),
+                      allowance=lambda r: (r.randrange(0, 5), r.randrange(0, 5)))
+ALLOWANCE_CHOICES = CHOICES + ('approve',) * 5 + ('transferFrom',) * 6 + ('erc20Transfer',) * 2 + ('allowance',)
+ALLOWANCE_SEEDS, ALLOWANCE_LENGTH = range(201, 211), 20
+COVER_ALLOWANCE = {'approve+', 'transferFrom-moves', 'erc20Transfer+', 'transfer+'}
 
 
-def random_call(rng, args, payable=True):
-    name = rng.choice(CHOICES)
+def random_call(rng, args, payable=True, choices=CHOICES):
+    name = rng.choice(choices)
     value = rng.randrange(0, 41) if name == 'deposit' and payable else int(rng.randrange(20) == 0)
     return name, args[name](rng), rng.choice(SENDERS), value
 
 
-def sequence(program, runtime, seed, length, args):
+def sequence(program, runtime, seed, length, args, choices=CHOICES):
     """LENGTH random calls from the genesis of PROGRAM; -> the final model state and the
     successful calls seen (name + '+' for a nonzero result, name + '0' for zero). After each
-    call the fold of the Transfer records since the deploy is mu; at the end balanceOf(h) = mass h."""
-    rng, s, seen = random.Random(seed), genesis(program), set()
+    call the fold of the Transfer records since the deploy is mu; at the end balanceOf(h) = mass h,
+    and allowance(o, p) for each (owner, spender) pair of an approve or transferFrom draw."""
+    rng, s, seen, pairs = random.Random(seed), genesis(program), set(), set()
     measure = fold({}, [st.transfer_log(0, h, u) for h, u in st.data_logs(program.path)], minted=True)
     chain, deposits, paid, recycled = at(s), 0, 0, 0
     for number in range(length):
-        label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args, not program.token)
+        label, call = f'{program.name}-seq{seed}-{number}', random_call(rng, args, not program.token, choices)
         model = apply(program, s, call)
         seen |= {call[0] + ('+' if model and model[1] else '0')} if model else set()
         if call[0] == 'transfer' and call[1][0] == 0 and model is None:
             seen.add('transfer-to-zero-revert')
+        if call[0] == 'transferFrom' and call[1][2] and model:
+            seen.add('transferFrom-moves')
+        pairs |= drawn_pair(s, call)
         deposits += (call[1][1] if program.token else call[3]) if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
         recycled += model[0].reserve[0] - s.reserve[0] if model and call[0] == 'withdraw' else 0
@@ -443,7 +514,19 @@ def sequence(program, runtime, seed, length, args):
     for h in IDENTITIES:
         s, chain = check_step(f'{program.name}-seq{seed}-balance-{h}', program, runtime, s, chain,
                               ('balanceOf', (h,), SENDER, 0))
+    for o, p in sorted(pairs):
+        s, chain = check_step(f'{program.name}-seq{seed}-allowance-{o}-{p}', program, runtime, s, chain,
+                              ('allowance', (o, p), SENDER, 0))
     return s, seen
+
+
+def drawn_pair(s, call):
+    """{(owner, spender)} of an approve or transferFrom CALL from S whose caller has an identity, else {}."""
+    name, args, sender, value = call
+    h = identity(s, sender)
+    if h is None or name not in ('approve', 'transferFrom'):
+        return set()
+    return {(h, args[0]) if name == 'approve' else (args[0], h)}
 
 
 def geth_claims(words):
@@ -621,6 +704,41 @@ def withdraw_moves_dust(program, runtime):
     return count
 
 
+def allowance_laws(program, runtime):
+    """The allowance laws on the geth state (MY CALL 171), from rich_debreu at the charter of each
+    vector. approve changes only the allowance word. transferFrom by the spender equals transfer by
+    from (every other word and the balance: mu, the claims and the treasury), and the allowance
+    falls by q. Over the allowance, or when transfer by from reverts (R, the mass, to = 0),
+    transferFrom reverts and the state does not change. -> the number of law calls."""
+    one, two = wallet(4096), wallet(4097)
+    # (charter, owner wallet, spender wallet, v, to, q, moves): identity 1 has mass 3 and identity 2
+    # mass 7; charter 1 open, 2 restricted (up to 4), 3 frozen.
+    vectors = ((1, one, two, 5, 3, 2, True), (1, one, two, 3, 3, 3, True), (1, one, two, 1, 3, 2, False),
+               (1, one, two, 9, 3, 4, False), (2, two, one, 6, 3, 5, False), (2, two, one, 6, 3, 4, True),
+               (3, one, two, 5, 3, 1, False), (1, one, two, 5, 0, 1, False), (1, one, one, 2, 2, 1, True))
+    base = rich_debreu(program)
+    for number, (charter, owner, spender, v, to, q, moves) in enumerate(vectors):
+        s = dataclasses.replace(base, charter=charter)
+        h, p, start, label = identity(s, owner), identity(s, spender), at(s), f'law-allowance-{number}'
+        key = allowance_word(h, p)
+        approved, chain = check_step(f'{label}-approve', program, runtime, s, start, ('approve', (p, v), owner, 0))
+        changed = {k for k in start[0].keys() | chain[0].keys() if start[0].get(k) != chain[0].get(k)}
+        require(changed <= {key} and chain[0].get(key, 0) == v and chain[1] == start[1],
+                f'{label}: approve {p} {v} moved a word other than the allowance')
+        allowed = q <= v and apply(program, approved, ('transfer', (to, q), owner, 0)) is not None
+        sent = check_step(f'{label}-transfer', program, runtime, approved, chain, ('transfer', (to, q), owner, 0))[1]
+        after = check_step(f'{label}-transferfrom', program, runtime, approved, chain,
+                           ('transferFrom', (h, to, q), spender, 0))[1]
+        want = (without(sent[0], key), sent[1], v - q) if allowed else (without(chain[0], key), chain[1], v)
+        require(allowed == moves and (without(after[0], key), after[1], after[0].get(key, 0)) == want,
+                f'{label}: transferFrom {h} {to} {q} with allowance {v} is not transfer by from')
+    return 3 * len(vectors)
+
+
+def without(words, key):
+    return {k: w for k, w in words.items() if k != key}
+
+
 def selector_table(runtime):
     """The selectors of the dispatcher (src/evm.c dispatch: DUP1 PUSH4 sel EQ PUSH2 dest JUMPI)."""
     return {m.group(1) for m in re.finditer('8063([0-9a-f]{8})1461[0-9a-f]{4}57', runtime) if m.start() % 2 == 0}
@@ -730,6 +848,12 @@ def main():
     for seed in TOKEN_SEEDS:
         seen |= sequence(program, runtime, seed, TOKEN_LENGTH, TOKEN_ARGS)[1]
     require(COVER_TOKEN <= seen, f'{program.name}: the sequences miss {sorted(COVER_TOKEN - seen)}')
+    program, runtime = load(DEBREU_ALLOWANCE)
+    seen = set()
+    for seed in ALLOWANCE_SEEDS:
+        seen |= sequence(program, runtime, seed, ALLOWANCE_LENGTH, ALLOWANCE_ARGS, ALLOWANCE_CHOICES)[1]
+    require(COVER_ALLOWANCE <= seen, f'{program.name}: the sequences miss {sorted(COVER_ALLOWANCE - seen)}')
+    allowed = allowance_laws(program, runtime)
     debreu, impossible, erc721 = built['debreu'], built['impossibility'], built['erc721']
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
@@ -738,7 +862,9 @@ def main():
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))
     print(f'CLAIMS sequences={sequences} steps={steps} laws={laws} contract={contract} geth=model OK'
-          f' token: sequences={len(TOKEN_SEEDS)} steps={len(TOKEN_SEEDS) * TOKEN_LENGTH} (logs: {st.WORK})')
+          f' token: sequences={len(TOKEN_SEEDS)} steps={len(TOKEN_SEEDS) * TOKEN_LENGTH}'
+          f' allowance: sequences={len(ALLOWANCE_SEEDS)} steps={len(ALLOWANCE_SEEDS) * ALLOWANCE_LENGTH}'
+          f' laws={allowed} (logs: {st.WORK})')
 
 
 if __name__ == '__main__':
