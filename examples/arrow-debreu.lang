@@ -51,18 +51,28 @@ def conserved : EqNat (natAdd (mass m2 1) (mass m2 2)) 5 := reflNat 5
 def name : Text := char 65 (char 114 (char 114 (char 111 (char 119 (char 45 (char 68 (char 101 (char 98 (char 114 (char 101 (char 117 end)))))))))))
 def symbol : Text := char 65 (char 68 end)
 
--- Interest state (refl candidates, SPEC section 5 laws).  `restrict` gives
--- the restriction of each charter: `open` admits any amount, `restricted`
--- admits up to 4 units, `frozen` admits nothing.  Each identity is
--- domestic and retail.
-def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
+-- Interest state (refl candidates, SPEC section 5 laws).  `restrictA` gives
+-- the classA restriction of each charter: `open` admits any amount,
+-- `restricted` admits up to 4 units, `frozen` admits nothing.  `restrict`
+-- is `restrictA` at classA; classB also denies a retail receiver.  Each
+-- identity is domestic and retail.
+def restrictA : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
   match c as w in Charter return Cap with
   | open => any
   | restricted => upTo 4
   | frozen => deny
+def restrict : Partition -> Charter -> Restriction :=
+  fun (t : Partition) (c : Charter) (p : Profile) (r : Profile) =>
+    match t as w in Partition return Cap with
+    | classA => restrictA c p r
+    | classB => (match r.1 as v in Status return Cap with
+      | retail => deny
+      | accredited => restrictA c p r)
 def prof : Profiles := fun (h : Identity) => tuple (domestic, retail)
 def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
-def s0 : InterestState := tuple (m1, tuple (restricted, t0))
+-- `inA m` is the book with the measure m at classA and none at classB.
+def inA : Measure -> Book := fun (m : Measure) => setPart (fun (c : Partition) => empty) classA m
+def s0 : InterestState := tuple (inA m1, tuple (restricted, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>
     case o with
@@ -70,23 +80,23 @@ def stateOr : InterestState -> Option InterestState -> InterestState :=
     | 1 (t : InterestState) => t
 
 -- transfer conserves the sum of the masses, and it moves 2 units.
-def e2 : Le 2 (mass s0.0 1) := (3, reflNat 5)
+def e2 : Le 2 (mass (s0.0 classA) 1) := (3, reflNat 5)
 def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 2 s0 e2)
-def transferConserves : EqNat (natAdd (mass s1.0 1) (mass s1.0 2)) (natAdd (mass s0.0 1) (mass s0.0 2)) := reflNat 5
-def transferMoves : EqNat (mass s1.0 2) 2 := reflNat 2
+def transferConserves : EqNat (natAdd (mass (s1.0 classA) 1) (mass (s1.0 classA) 2)) (natAdd (mass (s0.0 classA) 1) (mass (s0.0 classA) 2)) := reflNat 5
+def transferMoves : EqNat (mass (s1.0 classA) 2) 2 := reflNat 2
 
 -- transfer at q = 0 is the identity (the fallback s1 would give 3).
-def e0 : Le 0 (mass s0.0 1) := (5, reflNat 5)
+def e0 : Le 0 (mass (s0.0 classA) 1) := (5, reflNat 5)
 def z : InterestState := stateOr s1 (transfer restrict prof 1 2 0 s0 e0)
-def transferZero : EqNat (mass z.0 1) (mass s0.0 1) := reflNat 5
+def transferZero : EqNat (mass (z.0 classA) 1) (mass (s0.0 classA) 1) := reflNat 5
 
 -- the frozen charter admits no transfer.
-def sFrozen : InterestState := tuple (m1, tuple (frozen, t0))
-def transferFrozen : EqNat (mass (stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 1) 3 := reflNat 3
+def sFrozen : InterestState := tuple (inA m1, tuple (frozen, t0))
+def transferFrozen : EqNat (mass ((stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 classA) 1) 3 := reflNat 3
 
 -- transfer to identity 0 is none (no identity): the fallback s1 keeps
 -- identity 0 at mass 0.
-def transferNoIdentity : EqNat (mass (stateOr s1 (transfer restrict prof 1 0 2 s0 e2)).0 0) 0 := reflNat 0
+def transferNoIdentity : EqNat (mass ((stateOr s1 (transfer restrict prof 1 0 2 s0 e2)).0 classA) 0) 0 := reflNat 0
 
 -- approve sets the allowance of spender 3 over the units of identity 1 to
 -- 5; no other allowance changes.
@@ -104,15 +114,15 @@ def fromOr : prod (Allowance, InterestState) -> Option (prod (Allowance, Interes
     | 1 (t : prod (Allowance, InterestState)) => t
 def f0 : prod (Allowance, InterestState) := tuple (al0, s0)
 def f1 : prod (Allowance, InterestState) := fromOr f0 (transferFrom restrict prof 3 1 2 2 s0 al0 e2)
-def transferFromMoves : EqNat (mass f1.1.0 2) (mass s1.0 2) := reflNat 2
+def transferFromMoves : EqNat (mass (f1.1.0 classA) 2) (mass (s1.0 classA) 2) := reflNat 2
 def transferFromAllowance : EqNat (f1.0 1 3) 3 := reflNat 3
 
 -- transferFrom over the allowance (1 < 2) is none.
-def transferFromOver : EqNat (mass (fromOr f0 (transferFrom restrict prof 3 1 2 2 s0 (approve 1 3 1 al0) e2)).1.0 2) 0 := reflNat 0
+def transferFromOver : EqNat (mass ((fromOr f0 (transferFrom restrict prof 3 1 2 2 s0 (approve 1 3 1 al0) e2)).1.0 classA) 2) 0 := reflNat 0
 
 -- transferFrom is none when transfer is none: the frozen charter refuses
 -- the move, also with an allowance.
-def transferFromRestricted : EqNat (mass (fromOr f0 (transferFrom restrict prof 3 1 2 2 sFrozen al0 e2)).1.0 2) 0 := reflNat 0
+def transferFromRestricted : EqNat (mass ((fromOr f0 (transferFrom restrict prof 3 1 2 2 sFrozen al0 e2)).1.0 classA) 2) 0 := reflNat 0
 
 -- deposit, then amend: the charter becomes `gov F agg y` = open; the mass
 -- and the treasury do not change.
@@ -121,7 +131,7 @@ def s3 : InterestState := amendState F agg y s2
 def depositRent : EqNat (s2.1.1.0 rent) 7 := reflNat 7
 def depositSale : EqNat (s2.1.1.0 sale) 0 := reflNat 0
 def amendCharter : EqDec s3.1.0 open := reflDec open
-def amendMass : EqNat (natAdd (mass s3.0 1) (mass s3.0 2)) (natAdd (mass s2.0 1) (mass s2.0 2)) := reflNat 5
+def amendMass : EqNat (natAdd (mass (s3.0 classA) 1) (mass (s3.0 classA) 2)) (natAdd (mass (s2.0 classA) 1) (mass (s2.0 classA) 2)) := reflNat 5
 def amendReserve : EqNat (s3.1.1.0 rent) (s2.1.1.0 rent) := reflNat 7
 def dao : OwnershipDAO F := (agg, s3)
 
@@ -133,7 +143,7 @@ def dao : OwnershipDAO F := (agg, s3)
 -- grows by 1 and the dust keeps 1.  A withdraw that pays 0 (at S = 0, or
 -- 17 units at S = 20) does not change the state.
 def tW : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 17, 0)))
-def sW : InterestState := tuple (m1, tuple (restricted, tW))
+def sW : InterestState := tuple (inA m1, tuple (restricted, tW))
 def w5 : prod (Nat, InterestState) := withdraw 1 5 sW
 def withdrawLaw : EqNat (natAdd (natMul w5.0 5) (natAdd (natAdd (num w5.1 1) (dust w5.1)) (natMul 5 (w5.1.1.1.0 rent)))) (natAdd (natAdd (num sW 1) (dust sW)) (natMul 5 (sW.1.1.0 rent))) := reflNat 17
 def withdrawPays : EqNat w5.0 3 := reflNat 3
@@ -141,7 +151,7 @@ def withdrawClaim : EqNat (num w5.1 1) 0 := reflNat 0
 def withdrawDust : EqNat (dust w5.1) 2 := reflNat 2
 def withdrawOther : EqNat (num w5.1 2) 17 := reflNat 17
 def tC : Treasury := tuple (fun (j : Kind) => 4, tuple (0, tuple (fun (h : Identity) => 17, 4)))
-def sC : InterestState := tuple (m1, tuple (restricted, tC))
+def sC : InterestState := tuple (inA m1, tuple (restricted, tC))
 def wC : prod (Nat, InterestState) := withdraw 1 5 sC
 def withdrawCarry : EqNat (natAdd (natMul wC.0 5) (natAdd (natAdd (num wC.1 1) (dust wC.1)) (natMul 5 (wC.1.1.1.0 rent)))) (natAdd (natAdd (num sC 1) (dust sC)) (natMul 5 (sC.1.1.0 rent))) := reflNat 41
 def withdrawCarryReserve : EqNat (wC.1.1.1.0 rent) 5 := reflNat 5
@@ -210,10 +220,13 @@ def a90 : prod (Registry, Profiles) := pairOr (attest iss g0 prof 9 40 0 (tuple 
 def attestNoIdentity : EqNat (natAdd (idOr (a90.0 40)) (pcode (a90.1 0))) 0 := reflNat 0
 
 -- Weighted vote (O2, SPEC section 5).  `mG` is the genesis measure:
--- identity 1 has 5 units and identity 2 has 3 + 2.  Identity 1 votes open
--- and identity 2 votes frozen.  The tally is the image of the mass, and
--- the `members` = 3 seats go by the largest remainder.
+-- identity 1 has 5 units and identity 2 has 3 + 2.  `bG` is the genesis
+-- book: the 2 units of the wallet 4098 are in classB, so `bookTotal bG` is
+-- `mG`.  Identity 1 votes open and identity 2 votes frozen.  The tally is
+-- the image of the mass, and the `members` = 3 seats go by the largest
+-- remainder.
 def mG : Measure := credit (credit empty 1 5) 2 5
+def bG : Book := setPart (inA (credit (credit empty 1 5) 2 3)) classB (credit empty 2 2)
 def V0 : Votes := vote 2 (pureOption Ballot frozen) (vote 1 (pureOption Ballot open) noVotes)
 def vs : Voters := vcons 1 (vcons 2 vnil)
 def wV : T3 := wtally mG V0 vs
@@ -232,16 +245,16 @@ def recastMoves : prod (EqT3 (wtally mG V1 vs) (tuple (0, tuple (5, 5))), EqT3 (
 
 -- The image law: identity 1 moves 2 units to identity 2, and the 2 units
 -- then vote frozen.
-def sV : InterestState := tuple (mG, tuple (restricted, t0))
-def eV : Le 2 (mass sV.0 1) := (3, reflNat 5)
-def transferMovesVote : EqT3 (wtally (stateOr sV (transfer restrict prof 1 2 2 sV eV)).0 V0 vs) (tuple (3, tuple (0, 7))) := reflT3 (tuple (3, tuple (0, 7)))
+def sV : InterestState := tuple (bG, tuple (restricted, t0))
+def eV : Le 2 (mass (sV.0 classA) 1) := (3, reflNat 5)
+def transferMovesVote : EqT3 (wtally (bookTotal (stateOr sV (transfer restrict prof 1 2 2 sV eV)).0) V0 vs) (tuple (3, tuple (0, 7))) := reflT3 (tuple (3, tuple (0, 7)))
 
 -- No double vote: identity 1 votes open, moves its 5 units to identity 2
 -- (the open charter admits them), and identity 2 votes frozen.  The tally
 -- counts the 5 units one time, at frozen: the total is the mass of 1 and 2.
-def sO : InterestState := tuple (mG, tuple (open, t0))
-def e5 : Le 5 (mass sO.0 1) := (0, reflNat 5)
-def mN : Measure := (stateOr sO (transfer restrict prof 1 2 5 sO e5)).0
+def sO : InterestState := tuple (bG, tuple (open, t0))
+def e5 : Le 5 (mass (sO.0 classA) 1) := (0, reflNat 5)
+def mN : Measure := bookTotal (stateOr sO (transfer restrict prof 1 2 5 sO e5)).0
 def noDoubleVote : prod (EqT3 (wtally mN V0 vs) (tuple (0, tuple (0, 10))), EqNat (total (wtally mN V0 vs)) (natAdd (mass mN 1) (mass mN 2))) := tuple (reflT3 (tuple (0, tuple (0, 10))), reflNat 10)
 
 -- amendW: the seats (2, 0, 1) give `plural` = open.  The measure and the
@@ -250,16 +263,39 @@ def sVD : InterestState := deposit rent 7 sV
 def sA : InterestState := amendW F agg V0 vs sVD (reflNat 3)
 def amendWeighted : EqDec sA.1.0 open := reflDec open
 def repeatedVotersAmend : EqDec (amendW F agg V0 (vcons 1 (vcons 2 (vcons 2 vnil))) sVD (reflNat 3)).1.0 open := reflDec open
-def amendKeeps : prod (prod (EqNat (mass sA.0 1) (mass sVD.0 1), EqNat (mass sA.0 2) (mass sVD.0 2)), EqNat (sA.1.1.0 rent) (sVD.1.1.0 rent)) := tuple (tuple (reflNat 5, reflNat 5), reflNat 7)
+def amendKeeps : prod (prod (EqNat (mass (bookTotal sA.0) 1) (mass (bookTotal sVD.0) 1), EqNat (mass (bookTotal sA.0) 2) (mass (bookTotal sVD.0) 2)), EqNat (sA.1.1.0 rent) (sVD.1.1.0 rent)) := tuple (tuple (reflNat 5, reflNat 5), reflNat 7)
 def amendEmpty : EqDec (amendW F agg noVotes vs sVD (reflNat 3)).1.0 restricted := reflDec restricted
 
+-- Partitions (O4, MY CALL 209 (a)).  `sP` holds the genesis book `bG` at
+-- the open charter, and `pA` gives each identity the profile domestic
+-- accredited.  `partTotal`: the total of a book is the sum of its
+-- partitions, and the total of `bG` is the genesis measure.  A transfer of
+-- the 2 classB units of identity 2 to identity 1 keeps them in classB
+-- (`transferKeepsPart`), and classA does not change (`transferOtherPart`).
+-- `restrictByPartition`: to the retail identity 1 of `prof`, classA admits
+-- the transfer and classB denies it (the fallback `sP` keeps the 2 classB
+-- units at identity 2).  `recoverInConserves`: the issuer 9 moves the 2
+-- classB units of identity 2 to identity 3 (no restriction applies), and
+-- the classB mass of 2 and 3 stays 2.
+def partTotal : prod (EqNat (mass (bookTotal bG) 2) (natAdd (mass (bG classA) 2) (mass (bG classB) 2)), EqNat (mass (bookTotal bG) 2) (mass mG 2)) := tuple (reflNat 5, reflNat 5)
+def pA : Profiles := fun (h : Identity) => tuple (domestic, accredited)
+def sP : InterestState := tuple (bG, tuple (open, t0))
+def eP : Le 2 (mass (sP.0 classB) 2) := (0, reflNat 2)
+def bP : Book := (stateOr sP (transferIn restrict pA classB 2 1 2 sP eP)).0
+def transferKeepsPart : EqNat (mass (bP classB) 1) 2 := reflNat 2
+def transferOtherPart : prod (EqNat (mass (bP classA) 1) (mass (bG classA) 1), EqNat (mass (bP classA) 2) (mass (bG classA) 2)) := tuple (reflNat 5, reflNat 3)
+def eA : Le 2 (mass (sP.0 classA) 2) := (1, reflNat 3)
+def restrictByPartition : prod (EqNat (mass ((stateOr sP (transferIn restrict prof classA 2 1 2 sP eA)).0 classA) 1) 7, EqNat (mass ((stateOr sP (transferIn restrict prof classB 2 1 2 sP eP)).0 classB) 2) 2) := tuple (reflNat 7, reflNat 2)
+def rB : Book := (stateOr sP (recoverIn iss classB 9 2 3 2 sP eP)).0
+def recoverInConserves : prod (EqNat (natAdd (mass (rB classB) 2) (mass (rB classB) 3)) (natAdd (mass (bG classB) 2) (mass (bG classB) 3)), EqNat (mass (rB classB) 3) 2) := tuple (reflNat 2, reflNat 2)
+
 -- The program data of the contract (SPEC section 7): the start charter, the
--- genesis rows (identity 2 has two wallets), the waterfall and the trusted
--- issuers.  `restrict` is above.
+-- genesis rows (identity 2 has two wallets, and the wallet 4098 is in
+-- classB), the waterfall and the trusted issuers.  `restrict` is above.
 def start : Charter := restricted
 def genesis : Holders :=
-  hrow 4096 1 (tuple (domestic, retail)) 5
-    (hrow 4097 2 (tuple (foreign, accredited)) 3 (hrow 4098 2 (tuple (foreign, accredited)) 2 hnil))
+  hrow 4096 1 (tuple (domestic, retail)) 5 classA
+    (hrow 4097 2 (tuple (foreign, accredited)) 3 classA (hrow 4098 2 (tuple (foreign, accredited)) 2 classB hnil))
 def waterfall : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
   match c as w in Charter return Gate with
   | open => pass

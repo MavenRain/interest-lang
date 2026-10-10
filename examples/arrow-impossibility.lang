@@ -22,5 +22,5 @@ def massTwo : EqNat (mass m1 2) 0 := reflNat 0
 -- The program data (SPEC section 7): no restrict and no waterfall (the
 -- defaults deny and retain); identity 1 is the trusted issuer.
 def start : Charter := open
-def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 5 (hrow 4097 2 (tuple (domestic, retail)) 0 hnil)
+def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 5 classA (hrow 4097 2 (tuple (domestic, retail)) 0 classA hnil)
 def issuers : Charter -> Identity -> Option (prod ()) := fun (c : Charter) (h : Identity) => natEq h 1

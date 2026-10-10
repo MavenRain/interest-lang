@@ -1618,7 +1618,7 @@ static Value *profile_value(C *c, unsigned p) {
 static void data_genesis(C *c, Value *v, LangDomainData *data) {
   Global *row = find_global(c, "hrow");
   unsigned long long total = 0;
-  for (; !c->failed && v->kind == V_CON && v->global == row && v->nargs == 5; v = v->args[4]) {
+  for (; !c->failed && v->kind == V_CON && v->global == row && v->nargs == 6; v = v->args[5]) {
     if (data->holders == LANG_GENESIS_MAX) {
       refuse(c, "CONTRACT_GENESIS", "genesis", "has more than 32 rows");
       return;
@@ -1638,6 +1638,11 @@ static void data_genesis(C *c, Value *v, LangDomainData *data) {
     }
     h->profile = data_profile(c, v->args[2], "genesis");
     h->units = data_nat(c, v->args[3], "genesis");
+    h->partition = data_code(c, v->args[4], find_global(c, "Partition"), "genesis");
+    if (!c->failed && (h->partition < 1 || h->partition > LANG_PARTITIONS)) {
+      refuse(c, "CONTRACT_GENESIS", "genesis", "has a row with a partition outside 1 .. 2");
+      return;
+    }
     if (h->units > ULLONG_MAX - total) {
       refuse(c, "CONTRACT_GENESIS", "genesis", "has more than 2^64 - 1 units in total");
       return;
@@ -1733,12 +1738,18 @@ int lang_data(LangChecked *c, LangDomainData *data) {
   Value *genesis = data_def(c, "genesis", data_type(c, "Holders"));
   if (genesis != NULL)
     data_genesis(c, genesis, data);
-  Value *restrict_ = data_def(c, "restrict", data_arrow(c, ctype, data_type(c, "Restriction")));
-  for (size_t i = 0; restrict_ != NULL && i < k; i++)
-    for (unsigned p = 0; p < LANG_PROFILES; p++)
-      for (unsigned r = 0; r < LANG_PROFILES && !c->failed; r++)
-        data->cap[i][p][r] = data_cap(c, data_apply(c, data_apply(c, data_apply(c, restrict_, charters[i]),
-                                                               profile_value(c, p)), profile_value(c, r)));
+  Value *restrict_ = data_def(c, "restrict", data_arrow(c, data_type(c, "Partition"),
+                                                        data_arrow(c, ctype, data_type(c, "Restriction"))));
+  static const char *const partitions[LANG_PARTITIONS] = {"classA", "classB"};
+  for (unsigned a = 0; restrict_ != NULL && a < LANG_PARTITIONS; a++)
+    for (size_t i = 0; i < k; i++)
+      for (unsigned p = 0; p < LANG_PROFILES; p++)
+        for (unsigned r = 0; r < LANG_PROFILES && !c->failed; r++)
+          data->cap[a][i][p][r] =
+              data_cap(c, data_apply(c, data_apply(c, data_apply(c, data_apply(c, restrict_, global_value(c, partitions[a])),
+                                                                  charters[i]),
+                                                   profile_value(c, p)),
+                                     profile_value(c, r)));
   Value *waterfall = data_def(c, "waterfall", data_arrow(c, ctype, data_type(c, "Waterfall")));
   static const char *const kinds[LANG_KINDS] = {"rent", "sale"};
   for (size_t i = 0; waterfall != NULL && i < k; i++)

@@ -84,13 +84,14 @@ expect "inclusive cap boundaries" 0 "ok impossibility" check "$out/cap-boundarie
 # Distinct wallets may share an identity, but each genesis wallet has one row.
 cat > "$out/genesis-wallets.lang" <<'EOF'
 def members : Nat := 3
-def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2
-  (hrow 4097 1 (tuple (foreign, accredited)) 3 hnil)
+def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2 classA
+  (hrow 4097 1 (tuple (foreign, accredited)) 3 classA hnil)
 EOF
 expect "genesis shared identity" 0 "start 1
 charters 3
-genesis 4096:1:0:2 4097:1:3:3
-restrict d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+genesis 4096:1:0:2:1 4097:1:3:3:1
+restrict 1 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+restrict 2 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall rr rr rr
 issuers
 name interest
@@ -98,8 +99,8 @@ symbol INT" data "$out/genesis-wallets.lang"
 for identity in 1 2; do
   cat > "$out/genesis-duplicate.lang" <<EOF
 def members : Nat := 3
-def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2
-  (hrow 4096 $identity (tuple (foreign, accredited)) 3 hnil)
+def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2 classA
+  (hrow 4096 $identity (tuple (foreign, accredited)) 3 classA hnil)
 EOF
   refuse "duplicate genesis wallet identity $identity data" CONTRACT_GENESIS genesis \
     "repeats wallet 4096" data "$out/genesis-duplicate.lang"
@@ -110,7 +111,7 @@ done
 # Identity 0 is no identity: the registry stores identity + 1 (MY CALL 150 (b)).
 cat > "$out/genesis-identity-0.lang" <<'EOF'
 def members : Nat := 3
-def genesis : Holders := hrow 4096 0 (tuple (domestic, retail)) 2 hnil
+def genesis : Holders := hrow 4096 0 (tuple (domestic, retail)) 2 classA hnil
 EOF
 refuse "genesis identity 0 data" CONTRACT_GENESIS genesis \
   "has a row with identity 0" data "$out/genesis-identity-0.lang"
@@ -186,6 +187,8 @@ refuse "mutant debreu distributeSum reflNat 51" TYPE_MISMATCH distributeSum \
   "the types differ: expected EqNat 52 52, found EqNat 51 51" check "$root/test/mutants/debreu-sum-51.lang"
 refuse "mutant debreu amendMass reflNat 4" TYPE_MISMATCH amendMass \
   "the types differ: expected EqNat 5 5, found EqNat 4 4" check "$root/test/mutants/debreu-amend-4.lang"
+refuse "mutant debreu transferKeepsPart classA write" TYPE_MISMATCH transferKeepsPart \
+  "the types differ: expected EqNat 0 2, found EqNat 2 2" check "$root/test/mutants/debreu-part-93.lang"
 refuse "verdicts of a name that is not a ChoiceRule" VERDICT_TYPE agg "agg is not a ChoiceRule" \
   verdicts "$programs/arrow-debreu.lang" agg
 refuse "eval of an unknown name" TYPE_SCOPE nothing "nothing is not declared" \
@@ -194,16 +197,18 @@ refuse "eval of an unknown name" TYPE_SCOPE nothing "nothing is not declared" \
 # The program data of the contract (SPEC section 7, interestc data).
 expect "data of arrow-debreu" 0 "start 2
 charters 3
-genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
-restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+genesis 4096:1:0:5:1 4097:2:3:3:1 4098:2:3:2:2
+restrict 1 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+restrict 2 d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,u4,d,u4,d,u4,d,u4,d,u4,d,u4,d,u4,d,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pr rr
 issuers 1:1 2:1
 name Arrow-Debreu
 symbol AD" data "$programs/arrow-debreu.lang"
 expect "data of arrow-debreu-token" 0 "start 2
 charters 3
-genesis 4096:1:0:5 4097:2:3:3 4098:2:3:2
-restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+genesis 4096:1:0:5:1 4097:2:3:3:1 4098:2:3:2:1
+restrict 1 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+restrict 2 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4,u4 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pr rr
 issuers 1:1 2:1
 name interest
@@ -211,16 +216,18 @@ symbol INT
 asset token" data "$programs/arrow-debreu-token.lang"
 expect "data of arrow-impossibility" 0 "start 1
 charters 3
-genesis 4096:1:0:5 4097:2:0:0
-restrict d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+genesis 4096:1:0:5:1 4097:2:0:0:1
+restrict 1 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+restrict 2 d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall rr rr rr
 issuers 1:1 2:1 3:1
 name interest
 symbol INT" data "$programs/arrow-impossibility.lang"
 expect "data of erc721-dirac" 0 "start 1
 charters 3
-genesis 4096:1:0:1 4097:2:3:0 4098:3:0:0
-restrict a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+genesis 4096:1:0:1:1 4097:2:3:0:1 4098:3:0:0:1
+restrict 1 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
+restrict 2 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d
 waterfall pp pp rr
 issuers 1:1 2:1
 name interest

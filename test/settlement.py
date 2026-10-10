@@ -282,9 +282,10 @@ def deploy(name, creation, runtime, storage, logs=(), *, suffix='', token=None):
 
 
 def genesis_storage(start, rows):
-    """The storage that the genesis writes of domain/entries.c leave: rows w:h:p:u."""
+    """The storage that the genesis writes of domain/entries.c leave: rows w:h:p:u:part (no
+    write of the partition at O4 B1)."""
     store = {CHARTER: start}
-    for w, h, p, u in rows:
+    for w, h, p, u, _ in rows:
         store[slot(REGISTRY, w)] = h + 1
         store[slot(MU, h)] = store.get(slot(MU, h), 0) + u
         store[slot(PROFILE, h)] = p
@@ -300,7 +301,7 @@ def interestc(*args, binary=None):
 
 
 def data_rows(program, binary=None):
-    """The start and the genesis rows w:h:p:u of the `interestc data PROGRAM` lines."""
+    """The start and the genesis rows w:h:p:u:part of the `interestc data PROGRAM` lines."""
     lines = dict((line + ' ').split(' ', 1) for line in interestc('data', program, binary=binary).splitlines())
     return int(lines['start']), [tuple(map(int, row.split(':'))) for row in lines['genesis'].split()]
 
@@ -314,7 +315,7 @@ def data_logs(program, binary=None):
     """The (identity, units) of each genesis Transfer record of PROGRAM: one record for each identity
     with units, in the order of its first row (lang_domain_genesis)."""
     rows = data_rows(program, binary)[1]
-    sums = [(h, sum(u for _, k, _, u in rows if k == h)) for h in dict.fromkeys(h for _, h, _, _ in rows)]
+    sums = [(h, sum(u for _, k, _, u, _ in rows if k == h)) for h in dict.fromkeys(h for _, h, _, _, _ in rows)]
     return [(h, u) for h, u in sums if u]
 
 

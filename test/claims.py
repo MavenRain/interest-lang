@@ -69,9 +69,11 @@ METADATA = ('name()', 'symbol()', 'decimals()')
 
 @dataclasses.dataclass(frozen=True)
 class Program:
-    """The tables of one program: genesis rows (wallet, identity, profile, units), R codes
-    per charter and profile pair (a = any, uN = up to N, d = deny), W gates per charter and
-    kind (p = pass, r = retain), issuer pairs (charter, identity), the entry list."""
+    """The tables of one program: genesis rows (wallet, identity, profile, units, partition),
+    R codes per charter and profile pair (a = any, uN = up to N, d = deny) of partition 1
+    (classA, the model R), W gates per charter and kind (p = pass, r = retain), issuer pairs
+    (charter, identity), the entry list. CLASSB: the R codes of partition 2 (empty: the classA
+    codes); only the `data` text reads them (O4 B1, MY CALL 211)."""
     name: str
     path: object
     start: int
@@ -85,6 +87,7 @@ class Program:
     token: bool = False
     erc20_name: str = 'interest'
     erc20_symbol: str = 'INT'
+    classb: tuple = ()
 
     @property
     def supply(self):
@@ -95,35 +98,38 @@ class Program:
         return '\n'.join([
             f'start {self.start}', f'charters {len(self.restrict)}',
             'genesis ' + ' '.join(':'.join(map(str, row)) for row in self.genesis),
-            'restrict ' + ' '.join(','.join(row) for row in self.restrict),
+            *(f'restrict {part} ' + ' '.join(','.join(row) for row in table)
+              for part, table in enumerate((self.restrict, self.classb or self.restrict), 1)),
             'waterfall ' + ' '.join(self.waterfall),
             'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers),
             f'name {self.erc20_name}', f'symbol {self.erc20_symbol}']
                          + (['asset token'] if self.token else [])) + '\n'
 
 
-# examples/arrow-debreu.lang: restrict open any, restricted upTo 4, frozen deny.
+# examples/arrow-debreu.lang: restrict open any, restricted upTo 4, frozen deny; wallet 4098
+# in partition 2 (classB: an accredited receiver only, the odd profile codes).
 DEBREU = Program(
-    'debreu', st.DEBREU, 2, ((4096, 1, 0, 5), (4097, 2, 3, 3), (4098, 2, 3, 2)),
+    'debreu', st.DEBREU, 2, ((4096, 1, 0, 5, 1), (4097, 2, 3, 3, 1), (4098, 2, 3, 2, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
     ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'vote', 'mass',
      'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1,
-    erc20_name='Arrow-Debreu', erc20_symbol='AD')
+    erc20_name='Arrow-Debreu', erc20_symbol='AD', classb=(('d', 'a') * 8, ('d', 'u4') * 8, ('d',) * 16))
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
-    'impossibility', st.IMPOSSIBILITY, 1, ((4096, 1, 0, 5), (4097, 2, 0, 0)),
+    'impossibility', st.IMPOSSIBILITY, 1, ((4096, 1, 0, 5, 1), (4097, 2, 0, 0, 1)),
     (('d',) * 16,) * 3, ('rr',) * 3, ((1, 1), (2, 1), (3, 1)),
     ('deposit', 'withdraw', 'attest', 'mass', 'supply', 'claimOf', 'charter', 'reserve',
      'selfConstituting', 'balanceOf', 'totalSupply'), 0)
 # examples/erc721-dirac.lang: one unit (S = 1) at identity 1; restricted admits an accredited
 # receiver only (the profile code is 2 juris + status, so the odd codes).
 ERC721 = Program(
-    'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1), (4097, 2, 3, 0), (4098, 3, 0, 0)),
+    'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1, 1), (4097, 2, 3, 0, 1), (4098, 3, 0, 0, 1)),
     (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1)
 # examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b), and no
-# `name` or `symbol` def (the defaults, O5c).
+# `name` or `symbol` def (the defaults, O5c), and every wallet in partition 1.
 DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True,
-                                   erc20_name='interest', erc20_symbol='INT')
+                                   erc20_name='interest', erc20_symbol='INT', classb=(),
+                                   genesis=((4096, 1, 0, 5, 1), (4097, 2, 3, 3, 1), (4098, 2, 3, 2, 1)))
 # The allowance run (O5c B3, MY CALL 171): the Debreu tables, and the write facade as model entries.
 DEBREU_ALLOWANCE = dataclasses.replace(DEBREU, name='debreu-allowance', entries=DEBREU.entries + (
     'erc20Transfer', 'approve', 'transferFrom', 'allowance'))
@@ -155,7 +161,7 @@ class State:
 
 def genesis(program):
     mu, registry, profile = {}, {}, {}
-    for w, h, p, u in program.genesis:
+    for w, h, p, u, _ in program.genesis:
         registry[w] = h + 1
         mu[h] = mu.get(h, 0) + u
         profile[h] = p

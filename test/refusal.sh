@@ -82,6 +82,10 @@ refuse domain-erc-storage REFUSE_FORM - "$members" 'storage balanceOf : Identity
 refuse domain-hash-w TYPE_MISMATCH w "$members" 'def w : Charter -> Waterfall := fun (c : Charter) (hash : Nat) => pass'
 refuse domain-hash-r TYPE_MISMATCH r "$members" \
   'def r : Charter -> Restriction := fun (c : Charter) (hash : Nat) (b : Profile) => any'
+refuse domain-hrow-5 TYPE_MISMATCH genesis "$members" \
+  'def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2 hnil'
+refuse domain-hrow-partition TYPE_MISMATCH genesis "$members" \
+  'def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 2 open hnil'
 
 if [ "$failures" -eq 0 ]; then echo "refusal.sh: all passed"; exit 0; fi
 echo "refusal.sh: $failures failed"

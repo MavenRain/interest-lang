@@ -384,6 +384,30 @@ def empty : Measure := fun (h : Identity) => 0
 
 def mass : Measure -> Identity -> Nat := fun (m : Measure) (h : Identity) => m h
 
+-- `Partition` (O4, MY CALL 202 (a)): the classes of the units.  A `Book`
+-- gives the measure of each partition.  `bookTotal b` is the total measure
+-- (the codiagonal): the mass of h is the sum of its masses in the
+-- partitions.  `setPart b p m` is `b` with the measure of `p` set to `m`.
+mu Partition : Type 0 :=
+  | classA : Partition
+  | classB : Partition
+
+def partCode : Partition -> Nat := fun (c : Partition) =>
+  match c as w in Partition return Nat with
+  | classA => 0
+  | classB => 1
+
+def Book : Type 0 := Partition -> Measure
+
+def bookTotal : Book -> Measure := fun (b : Book) (h : Identity) =>
+  natAdd (mass (b classA) h) (mass (b classB) h)
+
+def setPart : Book -> Partition -> Measure -> Book :=
+  fun (b : Book) (p : Partition) (m : Measure) (c : Partition) =>
+    case natEq (partCode c) (partCode p) with
+    | 0 (u : prod ()) => b c
+    | 1 (u : prod ()) => m
+
 def credit : Measure -> Identity -> Nat -> Measure :=
   fun (m : Measure) (p : Identity) (n : Nat) (h : Identity) =>
     case natEq h p with
@@ -498,7 +522,7 @@ def release : Gate -> Nat -> Nat := fun (g : Gate) (a : Nat) =>
 -- from the active charter.
 def Treasury : Type 0 := prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))
 
-def InterestState : Type 0 := prod (Measure, prod (Charter, Treasury))
+def InterestState : Type 0 := prod (Book, prod (Charter, Treasury))
 
 def OwnershipDAO : ChoiceRule -> Type 0 := fun (F : ChoiceRule) =>
   (L : Aggregation F) * InterestState
@@ -536,35 +560,62 @@ def setNum : (Identity -> Nat) -> Identity -> Nat -> Identity -> Nat :=
     | 1 (u : prod ()) => v
 
 -- `Holders` is the genesis table of a program (SPEC section 7): one row per
--- wallet, with its identity, its profile and its units.  The compiler reads
--- the optional program defs `start : Charter`, `genesis : Holders`,
--- `restrict : Charter -> Restriction`, `waterfall : Charter -> Waterfall` and
--- `issuers : Charter -> Identity -> Option (prod ())` into the contract.
+-- wallet, with its identity, its profile, its units and its partition.  The
+-- compiler reads the optional program defs into the contract:
+-- `start : Charter`, `genesis : Holders`,
+-- `restrict : Partition -> Charter -> Restriction`,
+-- `waterfall : Charter -> Waterfall` and
+-- `issuers : Charter -> Identity -> Option (prod ())`.
 mu Holders : Type 0 :=
   | hnil : Holders
-  | hrow (w : Wallet) (h : Identity) (p : Profile) (u : Nat) (rest : Holders) : Holders
+  | hrow (w : Wallet) (h : Identity) (p : Profile) (u : Nat) (c : Partition) (rest : Holders) : Holders
 
 -- @section 11 Operations
 -- SPEC section 5.  The tables of each charter are arguments, not program
--- names (O9): `R` gives the restriction of a charter and `P` the profile of
--- an identity.  `castOrbit`: two configurations in one orbit give one
--- verdict.
+-- names (O9): `R` gives the restriction of a partition at a charter and `P`
+-- the profile of an identity.  `castOrbit`: two configurations in one orbit
+-- give one verdict.
 def castOrbit : (F : ChoiceRule) -> (L : Aggregation F) -> (x : Config) -> (y : Config) -> EqTally (orbit x) (orbit y) -> EqDec (gov F L x) (gov F L y) :=
   fun (F : ChoiceRule) (L : Aggregation F) (x : Config) (y : Config) (e : EqTally (orbit x) (orbit y)) =>
     congTD (rule F L) (orbit x) (orbit y) e
 
--- `transfer R P h k q s e`: q units move from h to k when the restriction
--- of the active charter admits q from the profile of h to the profile of
--- k and k is not 0 (identity 0 is no identity, MY CALL 150 (b)), else
--- none.  `e` is the erased proof `q <= mass h`.
-def transfer : (R : Charter -> Restriction) -> (P : Profiles) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass s.0 h)) -> Option InterestState :=
-  fun (R : Charter -> Restriction) (P : Profiles) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass s.0 h)) =>
-    case admits (R s.1.0 (P h) (P k)) q with
+-- `transferIn R P p h k q s e` (O4, MY CALL 203 (a)): q units of the
+-- partition p move from h to k when the restriction `R p` of the active
+-- charter admits q from the profile of h to the profile of k and k is not
+-- 0 (identity 0 is no identity, MY CALL 150 (b)), else none.  `e` is the
+-- erased proof `q <= mass (s.0 p) h`.  The other partition does not change.
+def transferIn : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -> (p : Partition) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass (s.0 p) h)) -> Option InterestState :=
+  fun (R : Partition -> Charter -> Restriction) (P : Profiles) (p : Partition) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass (s.0 p) h)) =>
+    case admits (R p s.1.0 (P h) (P k)) q with
     | 0 (u : prod ()) => none InterestState
     | 1 (u : prod ()) =>
       case natEq k 0 with
-      | 0 (v : prod ()) => pureOption InterestState (tuple (credit (debit s.0 h q e) k q, s.1))
+      | 0 (v : prod ()) => pureOption InterestState (tuple (setPart s.0 p (credit (debit (s.0 p) h q e) k q), s.1))
       | 1 (v : prod ()) => none InterestState
+
+-- `transfer R P h k q s e` moves the default partition classA (MY CALL 203
+-- (a)): it is `transferIn R P classA h k q s e`.
+def transfer : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass (s.0 classA) h)) -> Option InterestState :=
+  fun (R : Partition -> Charter -> Restriction) (P : Profiles) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass (s.0 classA) h)) =>
+    transferIn R P classA h k q s e
+
+-- `recoverIn I p c h k q s e` (O4, SPEC section 5 `recover`): the caller c
+-- moves q units of the partition p from h to k when c is an issuer of the
+-- active charter (`I`) and k is not 0, else none.  The restriction does
+-- not apply.  The claims and the treasury do not change.  `recover` moves
+-- the default partition classA.
+def recoverIn : (I : Charter -> Identity -> Option (prod ())) -> (p : Partition) -> (c : Identity) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass (s.0 p) h)) -> Option InterestState :=
+  fun (I : Charter -> Identity -> Option (prod ())) (p : Partition) (c : Identity) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass (s.0 p) h)) =>
+    case I s.1.0 c with
+    | 0 (u : prod ()) => none InterestState
+    | 1 (u : prod ()) =>
+      case natEq k 0 with
+      | 0 (v : prod ()) => pureOption InterestState (tuple (setPart s.0 p (credit (debit (s.0 p) h q e) k q), s.1))
+      | 1 (v : prod ()) => none InterestState
+
+def recover : (I : Charter -> Identity -> Option (prod ())) -> (c : Identity) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass (s.0 classA) h)) -> Option InterestState :=
+  fun (I : Charter -> Identity -> Option (prod ())) (c : Identity) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass (s.0 classA) h)) =>
+    recoverIn I classA c h k q s e
 
 -- `Allowance` (O5c, SPEC section 5): `A f p` is the count of units of `f`
 -- that the spender `p` can move.  The allowance is outside InterestState,
@@ -587,8 +638,8 @@ def approve : Identity -> Identity -> Nat -> Allowance -> Allowance :=
 -- `transfer R P f k q s e` with the allowance `A f p` decreased by q.  It
 -- is none when that transfer is none.  The spender needs an allowance
 -- also when p = f.
-def transferFrom : (R : Charter -> Restriction) -> (P : Profiles) -> (p : Identity) -> (f : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (A : Allowance) -> (0 e : Le q (mass s.0 f)) -> Option (prod (Allowance, InterestState)) :=
-  fun (R : Charter -> Restriction) (P : Profiles) (p : Identity) (f : Identity) (k : Identity) (q : Nat) (s : InterestState) (A : Allowance) (0 e : Le q (mass s.0 f)) =>
+def transferFrom : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -> (p : Identity) -> (f : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (A : Allowance) -> (0 e : Le q (mass (s.0 classA) f)) -> Option (prod (Allowance, InterestState)) :=
+  fun (R : Partition -> Charter -> Restriction) (P : Profiles) (p : Identity) (f : Identity) (k : Identity) (q : Nat) (s : InterestState) (A : Allowance) (0 e : Le q (mass (s.0 classA) f)) =>
     case natLt (A f p) q with
     | 0 (u : prod ()) =>
       mapOption InterestState (prod (Allowance, InterestState))
@@ -611,14 +662,14 @@ def amendState : (F : ChoiceRule) -> Aggregation F -> Config -> InterestState ->
 
 -- `amendW F L V xs s e` (O2) is `amend` on the weighted vote: when the
 -- listed voters hold mass (W is not 0), the active charter becomes `rule F
--- L` of the `members` seats of `wtally s.0 V xs`.  When W = 0, s does not
--- change (no quorum, MY CALL 185 (a)).  `e` is the proof that the seat
--- tally has `members` seats: a program gives it by evaluation, as for
--- `Config`.  The measure and the treasury do not change.
-def amendW : (F : ChoiceRule) -> (L : Aggregation F) -> (V : Votes) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally s.0 V xs))) members -> InterestState :=
-  fun (F : ChoiceRule) (L : Aggregation F) (V : Votes) (xs : Voters) (s : InterestState) (e : EqNat (total (seatTally members (wtally s.0 V xs))) members) =>
-    case natEq (total (wtally s.0 V xs)) 0 with
-    | 0 (u : prod ()) => tuple (s.0, tuple (rule F L (mkTally (seatTally members (wtally s.0 V xs)) e), s.1.1))
+-- L` of the `members` seats of `wtally (bookTotal s.0) V xs`.  When W = 0,
+-- s does not change (no quorum, MY CALL 185 (a)).  `e` is the proof that
+-- the seat tally has `members` seats: a program gives it by evaluation, as
+-- for `Config`.  The book and the treasury do not change.
+def amendW : (F : ChoiceRule) -> (L : Aggregation F) -> (V : Votes) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally (bookTotal s.0) V xs))) members -> InterestState :=
+  fun (F : ChoiceRule) (L : Aggregation F) (V : Votes) (xs : Voters) (s : InterestState) (e : EqNat (total (seatTally members (wtally (bookTotal s.0) V xs))) members) =>
+    case natEq (total (wtally (bookTotal s.0) V xs)) 0 with
+    | 0 (u : prod ()) => tuple (s.0, tuple (rule F L (mkTally (seatTally members (wtally (bookTotal s.0) V xs)) e), s.1.1))
     | 1 (u : prod ()) => s
 
 -- `recycle h S s` (O11): the claim of `h` becomes 0 and its remainder
@@ -645,7 +696,7 @@ def withdraw : Identity -> Nat -> InterestState -> prod (Nat, InterestState) :=
 -- does not change.
 def accrue : Kind -> Nat -> InterestState -> InterestState :=
   fun (i : Kind) (d : Nat) (s : InterestState) =>
-    tuple (s.0, tuple (s.1.0, tuple (subReserve s.1.1.0 i d, tuple (s.1.1.1.0, tuple (fun (k : Identity) => natAdd (s.1.1.1.1.0 k) (natMul (mass s.0 k) d), s.1.1.1.1.1)))))
+    tuple (s.0, tuple (s.1.0, tuple (subReserve s.1.1.0 i d, tuple (s.1.1.1.0, tuple (fun (k : Identity) => natAdd (s.1.1.1.1.0 k) (natMul (mass (bookTotal s.0) k) d), s.1.1.1.1.1)))))
 
 -- `distribute F oL W S i s` (SPEC section 5) is none at impossibility (the
 -- aggregation `oL` is none) and none at S = 0.  Else it releases

@@ -74,8 +74,20 @@ def stateOr : InterestState -> Option InterestState -> InterestState :=
     | 0 (u : prod ()) => d
     | 1 (t : InterestState) => t
 
--- transfer conserves the sum of the masses, and it moves 2 units.
-def e2 : Le 2 (mass (s0.0 classA) 1) := (3, reflNat 5)
-def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 2 s0 e2)
-def transferConserves : EqNat (natAdd (mass (s1.0 classA) 1) (mass (s1.0 classA) 2)) (natAdd (mass (s0.0 classA) 1) (mass (s0.0 classA) 2)) := reflNat 5
-def transferMoves : EqNat (mass (s1.0 classA) 2) 2 := reflNat 3
+-- Mutant M7 (O4): `transferInM` is `transferIn` with a defect: when p is
+-- classB, the write debits classB and credits classA.  `transferKeepsPart`
+-- fails: the 2 classB units do not arrive in classB.
+def bG : Book := setPart (inA (credit (credit empty 1 5) 2 3)) classB (credit empty 2 2)
+def transferInM : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -> (p : Partition) -> (h : Identity) -> (k : Identity) -> (q : Nat) -> (s : InterestState) -> (0 e : Le q (mass (s.0 p) h)) -> Option InterestState :=
+  fun (R : Partition -> Charter -> Restriction) (P : Profiles) (p : Partition) (h : Identity) (k : Identity) (q : Nat) (s : InterestState) (0 e : Le q (mass (s.0 p) h)) =>
+    case admits (R p s.1.0 (P h) (P k)) q with
+    | 0 (u : prod ()) => none InterestState
+    | 1 (u : prod ()) =>
+      case natEq k 0 with
+      | 0 (v : prod ()) => pureOption InterestState (tuple (setPart (setPart s.0 p (debit (s.0 p) h q e)) classA (credit (setPart s.0 p (debit (s.0 p) h q e) classA) k q), s.1))
+      | 1 (v : prod ()) => none InterestState
+def pA : Profiles := fun (h : Identity) => tuple (domestic, accredited)
+def sP : InterestState := tuple (bG, tuple (open, t0))
+def eP : Le 2 (mass (sP.0 classB) 2) := (0, reflNat 2)
+def bP : Book := (stateOr sP (transferInM restrict pA classB 2 1 2 sP eP)).0
+def transferKeepsPart : EqNat (mass (bP classB) 1) 2 := reflNat 2

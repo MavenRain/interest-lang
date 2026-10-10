@@ -1282,7 +1282,7 @@ void lang_domain_data(Asm *a, const EntryContext *c) {
     for (unsigned p = 0; p < LANG_PROFILES; p++)
       for (unsigned q = 0; q < LANG_PROFILES; q++) {
         LangCap deny = {LANG_CAP_DENY, 0};
-        limit_word(word, c->data == NULL ? deny : c->data->cap[r][p][q]);
+        limit_word(word, c->data == NULL ? deny : c->data->cap[0][r][p][q]);
         put_word(a, word);
       }
   for (unsigned r = 0; r < rows; r++)
@@ -1321,14 +1321,16 @@ static const char *cap_text(LangCap cap, char *buf, size_t size) {
 void lang_domain_print(const LangDomainData *data, FILE *out) {
   fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
   for (size_t i = 0; i < data->holders; i++)
-    fprintf(out, " %llu:%llu:%u:%llu", data->holder[i].wallet, data->holder[i].identity,
-            data->holder[i].profile, data->holder[i].units);
-  fputs("\nrestrict", out);
+    fprintf(out, " %llu:%llu:%u:%llu:%u", data->holder[i].wallet, data->holder[i].identity,
+            data->holder[i].profile, data->holder[i].units, data->holder[i].partition);
   char buf[32];
-  for (unsigned i = 0; i < data->charters; i++)
-    for (unsigned p = 0; p < LANG_PROFILES; p++)
-      for (unsigned r = 0; r < LANG_PROFILES; r++)
-        fprintf(out, "%s%s", p == 0 && r == 0 ? " " : ",", cap_text(data->cap[i][p][r], buf, sizeof buf));
+  for (unsigned a = 0; a < LANG_PARTITIONS; a++) {
+    fprintf(out, "\nrestrict %u", a + 1);
+    for (unsigned i = 0; i < data->charters; i++)
+      for (unsigned p = 0; p < LANG_PROFILES; p++)
+        for (unsigned r = 0; r < LANG_PROFILES; r++)
+          fprintf(out, "%s%s", p == 0 && r == 0 ? " " : ",", cap_text(data->cap[a][i][p][r], buf, sizeof buf));
+  }
   fputs("\nwaterfall", out);
   for (unsigned i = 0; i < data->charters; i++)
     fprintf(out, " %c%c", data->pass[i][0] ? 'p' : 'r', data->pass[i][1] ? 'p' : 'r');

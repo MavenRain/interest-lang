@@ -37,7 +37,8 @@ def ownerTwo : EqNat (mass m1 2) 0 := reflNat 0
 -- amount, `restricted` admits a transfer to an accredited receiver only,
 -- `frozen` admits nothing.  Identity 2 is foreign accredited, each other
 -- identity is domestic retail.
-def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
+-- classB has the restriction of classA.
+def restrict : Partition -> Charter -> Restriction := fun (t : Partition) (c : Charter) (p : Profile) (r : Profile) =>
   match c as w in Charter return Cap with
   | open => any
   | restricted => (match r.1 as v in Status return Cap with
@@ -49,7 +50,9 @@ def prof : Profiles := fun (h : Identity) =>
   | 0 (u : prod ()) => tuple (domestic, retail)
   | 1 (u : prod ()) => tuple (foreign, accredited)
 def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
-def s0 : InterestState := tuple (m1, tuple (open, t0))
+-- `inA m` is the book with the measure m at classA and none at classB.
+def inA : Measure -> Book := fun (m : Measure) => setPart (fun (c : Partition) => empty) classA m
+def s0 : InterestState := tuple (inA m1, tuple (open, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>
     case o with
@@ -58,10 +61,10 @@ def stateOr : InterestState -> Option InterestState -> InterestState :=
 
 -- transfer moves the whole unit from identity 1 to identity 2: the measure
 -- stays a Dirac measure.
-def e1 : Le 1 (mass s0.0 1) := (0, reflNat 1)
+def e1 : Le 1 (mass (s0.0 classA) 1) := (0, reflNat 1)
 def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 1 s0 e1)
-def transferMoves : EqNat (mass s1.0 2) 1 := reflNat 1
-def transferLeaves : EqNat (mass s1.0 1) 0 := reflNat 0
+def transferMoves : EqNat (mass (s1.0 classA) 2) 1 := reflNat 1
+def transferLeaves : EqNat (mass (s1.0 classA) 1) 0 := reflNat 0
 
 -- Weighted vote (O2): the one unit is at identity 1.  The holder votes
 -- frozen and gets all `members` seats: a Dirac measure is a dictator.
@@ -70,17 +73,17 @@ def diracDictator : EqT3 (seats members (wtally m1 (vote 1 (pureOption Ballot fr
 -- The restricted charter admits the transfer to identity 2 (accredited)
 -- and not the transfer to identity 3 (retail): the fallback s0 keeps the
 -- unit at identity 1.
-def sR : InterestState := tuple (m1, tuple (restricted, t0))
-def restrictedAccredited : EqNat (mass (stateOr s0 (transfer restrict prof 1 2 1 sR e1)).0 2) 1 := reflNat 1
-def restrictedRetail : EqNat (mass (stateOr s0 (transfer restrict prof 1 3 1 sR e1)).0 1) 1 := reflNat 1
+def sR : InterestState := tuple (inA m1, tuple (restricted, t0))
+def restrictedAccredited : EqNat (mass ((stateOr s0 (transfer restrict prof 1 2 1 sR e1)).0 classA) 2) 1 := reflNat 1
+def restrictedRetail : EqNat (mass ((stateOr s0 (transfer restrict prof 1 3 1 sR e1)).0 classA) 1) 1 := reflNat 1
 
 -- The program data of the contract (SPEC section 7): the start charter, the
 -- genesis rows (one unit, so S = 1), the waterfall and the trusted issuers.
 -- `restrict` is above.
 def start : Charter := open
 def genesis : Holders :=
-  hrow 4096 1 (tuple (domestic, retail)) 1
-    (hrow 4097 2 (tuple (foreign, accredited)) 0 (hrow 4098 3 (tuple (domestic, retail)) 0 hnil))
+  hrow 4096 1 (tuple (domestic, retail)) 1 classA
+    (hrow 4097 2 (tuple (foreign, accredited)) 0 classA (hrow 4098 3 (tuple (domestic, retail)) 0 classA hnil))
 def waterfall : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
   match c as w in Charter return Gate with
   | open => pass

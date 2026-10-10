@@ -9,12 +9,13 @@
 #ifndef LANG_DOMAIN_DATA_H
 #define LANG_DOMAIN_DATA_H
 #include "check.h"
-enum { LANG_GENESIS_MAX = 32, LANG_PROFILES = 4, LANG_KINDS = 2, LANG_TEXT_MAX = 32 };
+enum { LANG_GENESIS_MAX = 32, LANG_PROFILES = 4, LANG_KINDS = 2, LANG_TEXT_MAX = 32, LANG_PARTITIONS = 2 };
 typedef enum { LANG_CAP_DENY, LANG_CAP_UP_TO, LANG_CAP_ANY } LangCapTag;
 typedef struct { LangCapTag tag; unsigned long long n; } LangCap;
 typedef struct {
   unsigned long long wallet, identity, units;
   unsigned profile;            /* 2 (juris - 1) + (status - 1), 0 .. 3 */
+  unsigned partition;          /* the Partition code, 1 .. LANG_PARTITIONS (O4) */
 } LangHolder;
 typedef struct { unsigned charter; unsigned long long identity; } LangIssuer;
 /* The asset of the contract (SPEC section 7, O5b). */
@@ -29,7 +30,7 @@ struct LangDomainData {
   unsigned charters;           /* K, the constructors of Charter */
   size_t holders;
   LangHolder holder[LANG_GENESIS_MAX];
-  LangCap cap[LANG_DECISIONS_MAX][LANG_PROFILES][LANG_PROFILES];  /* R, charter code - 1 first */
+  LangCap cap[LANG_PARTITIONS][LANG_DECISIONS_MAX][LANG_PROFILES][LANG_PROFILES];  /* R, partition code - 1 first, then charter code - 1 */
   unsigned char pass[LANG_DECISIONS_MAX][LANG_KINDS];            /* W: 1 pass, 0 retain */
   size_t issuers;
   LangIssuer issuer[LANG_DECISIONS_MAX * LANG_GENESIS_MAX];

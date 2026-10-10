@@ -50,14 +50,17 @@ def conserved : EqNat (natAdd (mass m2 1) (mass m2 2)) 5 := reflNat 5
 -- the restriction of each charter: `open` admits any amount, `restricted`
 -- admits up to 4 units, `frozen` admits nothing.  Each identity is
 -- domestic and retail.
-def restrict : Charter -> Restriction := fun (c : Charter) (p : Profile) (r : Profile) =>
+-- classB has the restriction of classA.
+def restrict : Partition -> Charter -> Restriction := fun (t : Partition) (c : Charter) (p : Profile) (r : Profile) =>
   match c as w in Charter return Cap with
   | open => any
   | restricted => upTo 4
   | frozen => deny
 def prof : Profiles := fun (h : Identity) => tuple (domestic, retail)
 def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
-def s0 : InterestState := tuple (m1, tuple (restricted, t0))
+-- `inA m` is the book with the measure m at classA and none at classB.
+def inA : Measure -> Book := fun (m : Measure) => setPart (fun (c : Partition) => empty) classA m
+def s0 : InterestState := tuple (inA m1, tuple (restricted, t0))
 def stateOr : InterestState -> Option InterestState -> InterestState :=
   fun (d : InterestState) (o : Option InterestState) =>
     case o with
@@ -65,19 +68,19 @@ def stateOr : InterestState -> Option InterestState -> InterestState :=
     | 1 (t : InterestState) => t
 
 -- transfer conserves the sum of the masses, and it moves 2 units.
-def e2 : Le 2 (mass s0.0 1) := (3, reflNat 5)
+def e2 : Le 2 (mass (s0.0 classA) 1) := (3, reflNat 5)
 def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 2 s0 e2)
-def transferConserves : EqNat (natAdd (mass s1.0 1) (mass s1.0 2)) (natAdd (mass s0.0 1) (mass s0.0 2)) := reflNat 5
-def transferMoves : EqNat (mass s1.0 2) 2 := reflNat 2
+def transferConserves : EqNat (natAdd (mass (s1.0 classA) 1) (mass (s1.0 classA) 2)) (natAdd (mass (s0.0 classA) 1) (mass (s0.0 classA) 2)) := reflNat 5
+def transferMoves : EqNat (mass (s1.0 classA) 2) 2 := reflNat 2
 
 -- transfer at q = 0 is the identity (the fallback s1 would give 3).
-def e0 : Le 0 (mass s0.0 1) := (5, reflNat 5)
+def e0 : Le 0 (mass (s0.0 classA) 1) := (5, reflNat 5)
 def z : InterestState := stateOr s1 (transfer restrict prof 1 2 0 s0 e0)
-def transferZero : EqNat (mass z.0 1) (mass s0.0 1) := reflNat 5
+def transferZero : EqNat (mass (z.0 classA) 1) (mass (s0.0 classA) 1) := reflNat 5
 
 -- the frozen charter admits no transfer.
-def sFrozen : InterestState := tuple (m1, tuple (frozen, t0))
-def transferFrozen : EqNat (mass (stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 1) 3 := reflNat 3
+def sFrozen : InterestState := tuple (inA m1, tuple (frozen, t0))
+def transferFrozen : EqNat (mass ((stateOr s1 (transfer restrict prof 1 2 2 sFrozen e2)).0 classA) 1) 3 := reflNat 3
 
 -- deposit, then amend: the charter becomes `gov F agg y` = open; the mass
 -- and the treasury do not change.
@@ -86,7 +89,7 @@ def s3 : InterestState := amendState F agg y s2
 def depositRent : EqNat (s2.1.1.0 rent) 7 := reflNat 7
 def depositSale : EqNat (s2.1.1.0 sale) 0 := reflNat 0
 def amendCharter : EqDec s3.1.0 open := reflDec open
-def amendMass : EqNat (natAdd (mass s3.0 1) (mass s3.0 2)) (natAdd (mass s2.0 1) (mass s2.0 2)) := reflNat 5
+def amendMass : EqNat (natAdd (mass (s3.0 classA) 1) (mass (s3.0 classA) 2)) (natAdd (mass (s2.0 classA) 1) (mass (s2.0 classA) 2)) := reflNat 5
 def amendReserve : EqNat (s3.1.1.0 rent) (s2.1.1.0 rent) := reflNat 7
 def dao : OwnershipDAO F := (agg, s3)
 
@@ -98,7 +101,7 @@ def dao : OwnershipDAO F := (agg, s3)
 -- grows by 1 and the dust keeps 1.  A withdraw that pays 0 (at S = 0, or
 -- 17 units at S = 20) does not change the state.
 def tW : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 17, 0)))
-def sW : InterestState := tuple (m1, tuple (restricted, tW))
+def sW : InterestState := tuple (inA m1, tuple (restricted, tW))
 def w5 : prod (Nat, InterestState) := withdraw 1 5 sW
 def withdrawLaw : EqNat (natAdd (natMul w5.0 5) (natAdd (natAdd (num w5.1 1) (dust w5.1)) (natMul 5 (w5.1.1.1.0 rent)))) (natAdd (natAdd (num sW 1) (dust sW)) (natMul 5 (sW.1.1.0 rent))) := reflNat 17
 def withdrawPays : EqNat w5.0 3 := reflNat 3
@@ -106,7 +109,7 @@ def withdrawClaim : EqNat (num w5.1 1) 0 := reflNat 0
 def withdrawDust : EqNat (dust w5.1) 2 := reflNat 2
 def withdrawOther : EqNat (num w5.1 2) 17 := reflNat 17
 def tC : Treasury := tuple (fun (j : Kind) => 4, tuple (0, tuple (fun (h : Identity) => 17, 4)))
-def sC : InterestState := tuple (m1, tuple (restricted, tC))
+def sC : InterestState := tuple (inA m1, tuple (restricted, tC))
 def wC : prod (Nat, InterestState) := withdraw 1 5 sC
 def withdrawCarry : EqNat (natAdd (natMul wC.0 5) (natAdd (natAdd (num wC.1 1) (dust wC.1)) (natMul 5 (wC.1.1.1.0 rent)))) (natAdd (natAdd (num sC 1) (dust sC)) (natMul 5 (sC.1.1.0 rent))) := reflNat 41
 def withdrawCarryReserve : EqNat (wC.1.1.1.0 rent) 5 := reflNat 5
@@ -175,8 +178,8 @@ def attestNonIssuer : EqNat (natAdd (idOr (a7.0 40)) (pcode (a7.1 1))) 0 := refl
 -- issuers.  `restrict` is above.
 def start : Charter := restricted
 def genesis : Holders :=
-  hrow 4096 1 (tuple (domestic, retail)) 5
-    (hrow 4097 2 (tuple (foreign, accredited)) 3 (hrow 4098 2 (tuple (foreign, accredited)) 2 hnil))
+  hrow 4096 1 (tuple (domestic, retail)) 5 classA
+    (hrow 4097 2 (tuple (foreign, accredited)) 3 classA (hrow 4098 2 (tuple (foreign, accredited)) 2 classA hnil))
 def waterfall : Charter -> Waterfall := fun (c : Charter) (j : Kind) =>
   match c as w in Charter return Gate with
   | open => pass
