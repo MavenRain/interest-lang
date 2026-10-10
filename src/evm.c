@@ -19,7 +19,7 @@
 #include <string.h>
 
 enum {
-  EVM_ENTRIES = 16,         /* entries of one regime */
+  EVM_ENTRIES = 24,         /* entries of one regime; Debreu lists 20 (the kit host has 16) */
   EVM_RUNTIME_MAX = 24576,  /* EIP-170 */
   EVM_PACK_BITS = 256,      /* lang_entry_amend packs ceil(log2(k + 1)) bits per tally into one word, when they fit */
   EVM_TABLE_MAX = 4096,     /* bytes of the verdict table; it sets the member bound (members_max) */

@@ -10,7 +10,9 @@
  * CHECKPOINT (slot 6, identity -> INDEX at the last settle), NUM (slot 7,
  * identity -> numerator in units of 1/S wei), DUST (slot 8, the treasury
  * dust in units of 1/S wei, L6) and CARRIER (slot 9, the ERC-20 carrier
- * address, token mode only, O5b). In token mode, each amount in wei is an
+ * address, token mode only, O5b). ALLOWANCE (slot 10, both modes, O5c) maps
+ * an owner identity, then a spender identity, to units, as a Solidity
+ * nested mapping. In token mode, each amount in wei is an
  * amount in carrier units. S, the sum of the genesis units, is a code
  * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
  *
@@ -28,7 +30,7 @@
 enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
-  SLOT_DUST = 8, SLOT_CARRIER = 9
+  SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10
 };
 
 /* MEM_CALL: the calldata of a carrier call, the selector at MEM_CALL and
@@ -493,13 +495,12 @@ static void withdraw_token(Asm *a, const EntryContext *c) {
   withdraw_body(a, c, LANG_ASSET_TOKEN);
 }
 
-/* to from value -> (nothing): LOG3 Transfer(from, to, value), the ERC-20
- * event (O5a), with the value word at memory 0. topic0 is
- * keccak256("Transfer(address,address,uint256)"). */
-static void transfer_log(Asm *a) {
-  static const char event[] = "Transfer(address,address,uint256)";
+/* second first value -> (nothing): LOG3 EVENT(first, second, value), an
+ * ERC-20 event with two indexed identity words, with the value word at
+ * memory 0. topic0 is keccak256(EVENT). */
+static void erc20_log(Asm *a, const char *event) {
   unsigned char topic[WORD];
-  lang_keccak256((const unsigned char *)event, sizeof event - 1, topic);
+  lang_keccak256((const unsigned char *)event, strlen(event), topic);
   asm_store(a, 0);
   asm_push_word(a, topic);
   asm_push(a, WORD);
@@ -507,26 +508,49 @@ static void transfer_log(Asm *a) {
   asm_op(a, OP_LOG3);
 }
 
-/* transfer to q: h = id(CALLER); q >= R[CHARTER][PROFILE h][PROFILE to]
- * reverts; to = 0, q > MU[h] or to + 1 overflow reverts; settle h, then
- * settle to (SPEC 5: checkpoints
- * both identities); MU[h] -= q, then MU[to] += q (read after the debit, so
- * to = h keeps the mass); logs Transfer(h, to, q), also at q = 0 and at
- * to = h (O5a); returns 1. */
-static void transfer(Asm *a, const EntryContext *c) {
-  (void)c;
-  /* Every destination must admit the registry encoding identity + 1, and
-   * identity 0 is no identity (MY CALL 150 (b)). */
-  asm_argument(a, 0);
+/* to from value -> (nothing): LOG3 Transfer(from, to, value), the ERC-20
+ * event (O5a). */
+static void transfer_log(Asm *a) {
+  erc20_log(a, "Transfer(address,address,uint256)");
+}
+
+/* spender owner value -> (nothing): LOG3 Approval(owner, spender, value),
+ * the ERC-20 event of approve (O5c, MY CALL 167). */
+static void approval_log(Asm *a) {
+  erc20_log(a, "Approval(address,address,uint256)");
+}
+
+/* spender owner -> the slot of ALLOWANCE[owner][spender]:
+ * keccak256(spender . keccak256(owner . SLOT_ALLOWANCE)), the Solidity
+ * nested mapping (MY CALL 168). */
+static void allowance_slot(Asm *a) {
+  asm_slot(a, SLOT_ALLOWANCE);
+  asm_push(a, 0x20);
+  asm_op(a, OP_MSTORE);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MSTORE);
+  asm_push(a, 0x40);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_SHA3);
+}
+
+/* Reverts when calldata word TO is 0 or TO + 1 overflows. Every destination
+ * must admit the registry encoding identity + 1, and identity 0 is no
+ * identity (MY CALL 150 (b)). */
+static void destination_guard(Asm *a, unsigned to) {
+  asm_argument(a, to);
   asm_push(a, 1);
   asm_checked_add(a);
   asm_op(a, OP_POP);
-  asm_argument(a, 0);
+  asm_argument(a, to);
   asm_op(a, OP_ISZERO);
   asm_revert_if(a);
-  caller_identity(a);
-  asm_store(a, MEM_ID);
-  asm_argument(a, 0);
+}
+
+/* R: reverts when word Q >= R[CHARTER][PROFILE h][PROFILE to], with h at
+ * memory MEM_ID and to the calldata word TO. */
+static void restriction_guard(Asm *a, unsigned to, unsigned q) {
+  asm_argument(a, to);
   asm_slot(a, SLOT_PROFILE);
   asm_op(a, OP_SLOAD);
   asm_load(a, MEM_ID);
@@ -544,43 +568,143 @@ static void transfer(Asm *a, const EntryContext *c) {
   asm_op(a, OP_MUL);
   asm_op(a, OP_ADD);
   data_word(a);
-  asm_argument(a, 1);
+  asm_argument(a, q);
   asm_op(a, OP_LT);
   asm_op(a, OP_ISZERO);
   asm_revert_if(a);
+}
+
+/* The move of transfer, with h at memory MEM_ID, to the calldata word TO
+ * and q the word Q: q > MU[h] reverts; settle h, then settle to (SPEC 5:
+ * checkpoints both identities); MU[h] -= q, then MU[to] += q (read after
+ * the debit, so to = h keeps the mass); logs Transfer(h, to, q), also at
+ * q = 0 and at to = h (O5a); returns 1. */
+static void move(Asm *a, unsigned to, unsigned q) {
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 1);
+  asm_argument(a, q);
   asm_op(a, OP_GT);
   asm_revert_if(a);
   asm_load(a, MEM_ID);
   settle(a);
-  asm_argument(a, 0);
+  asm_argument(a, to);
   settle(a);
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 1);
+  asm_argument(a, q);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SUB);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
-  asm_argument(a, 0);
+  asm_argument(a, to);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 1);
+  asm_argument(a, q);
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
+  asm_argument(a, to);
+  asm_load(a, MEM_ID);
+  asm_argument(a, q);
+  transfer_log(a);
+  asm_push(a, 1);
+  asm_return_top(a);
+}
+
+/* transfer to q: h = id(CALLER); q >= R[CHARTER][PROFILE h][PROFILE to]
+ * reverts; to = 0, q > MU[h] or to + 1 overflow reverts; then the move of
+ * q from h to to; returns 1. */
+static void transfer(Asm *a, const EntryContext *c) {
+  (void)c;
+  destination_guard(a, 0);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  restriction_guard(a, 0, 1);
+  move(a, 0, 1);
+}
+
+/* transfer(address to, uint256 q) of the ERC-20 facade (O5c, MY CALL 164):
+ * to >= 2^160 reverts, then the transfer body; returns 1. */
+static void transfer_erc20(Asm *a, const EntryContext *c) {
+  asm_address_guard(a, 0);
+  transfer(a, c);
+}
+
+/* approve(address spender, uint256 v) (O5c, MY CALLs 165 and 167):
+ * spender >= 2^160 or spender = 0 reverts; owner = id(CALLER);
+ * ALLOWANCE[owner][spender] := v; logs Approval(owner, spender, v), also at
+ * v = 0 and at an unchanged v; returns 1. */
+static void approve(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_address_guard(a, 0);
+  asm_argument(a, 0);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  allowance_slot(a);
   asm_op(a, OP_SSTORE);
   asm_argument(a, 0);
   asm_load(a, MEM_ID);
   asm_argument(a, 1);
-  transfer_log(a);
+  approval_log(a);
   asm_push(a, 1);
   asm_return_top(a);
+}
+
+/* allowance(address owner, address spender) (O5c): owner >= 2^160 or
+ * spender >= 2^160 reverts; ALLOWANCE[owner][spender]. */
+static void allowance(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_address_guard(a, 0);
+  asm_address_guard(a, 1);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  allowance_slot(a);
+  asm_op(a, OP_SLOAD);
+  asm_return_top(a);
+}
+
+/* transferFrom(address from, address to, uint256 q) (O5c, MY CALLs 165 to
+ * 167): from >= 2^160, to >= 2^160, from = 0 or to = 0 reverts; spender =
+ * id(CALLER); q > ALLOWANCE[from][spender] reverts, else ALLOWANCE -= q (no
+ * max rule, and from = spender needs an allowance too); then R from the
+ * profile of from to the profile of to, and the move of q from from to to;
+ * logs Transfer(from, to, q) and no Approval; returns 1. A later revert
+ * undoes the allowance store. */
+static void transfer_from(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_address_guard(a, 0);
+  asm_address_guard(a, 1);
+  asm_argument(a, 0);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  destination_guard(a, 1);
+  asm_argument(a, 0);
+  asm_store(a, MEM_ID);
+  caller_identity(a);
+  asm_load(a, MEM_ID);
+  allowance_slot(a);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  asm_argument(a, 2);
+  asm_op(a, OP_DUP2);
+  asm_op(a, OP_DUP2);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SUB);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
+  restriction_guard(a, 1, 2);
+  move(a, 1, 2);
 }
 
 /* Reverts unless (CHARTER, id(CALLER)) is an issuer pair (an unrolled
@@ -782,6 +906,10 @@ static const Entry debreu[] = {
   {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu, NULL},
   {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
   {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer_erc20, "address,uint256"},
+  {"approve", 2, 0, ENTRY_NONPAYABLE, approve, "address,uint256"},
+  {"allowance", 2, 0, ENTRY_NONPAYABLE, allowance, "address,address"},
+  {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from, "address,address,uint256"},
 };
 
 /* Token mode (O5b): the same rows, but deposit takes kind and a (not
@@ -817,6 +945,10 @@ static const Entry debreu_token[] = {
   {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu, NULL},
   {"balanceOf", 1, 0, ENTRY_NONPAYABLE, mass, "address"},
   {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer_erc20, "address,uint256"},
+  {"approve", 2, 0, ENTRY_NONPAYABLE, approve, "address,uint256"},
+  {"allowance", 2, 0, ENTRY_NONPAYABLE, allowance, "address,address"},
+  {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from, "address,address,uint256"},
 };
 
 /* The table of REGIME: the token table when the program data selects the

@@ -51,6 +51,10 @@ FORBIDDEN = ('mint(address,uint256)', 'mint(uint256,uint256)', 'mint(uint256)', 
              'setIssuer(uint256,uint256)', 'addIssuer(uint256)')
 # Signatures that the contract must have in each regime (the ERC-20 read facade, O5a).
 REQUIRED = ('balanceOf(address)', 'totalSupply()')
+# The write facade of the Debreu tables (O5c B1, MY CALLs 163 and 164): the ERC-20 transfer and
+# the allowance surface. Its FORBIDDEN signatures are entries at Debreu and refusals at impossibility.
+WRITE_FACADE = ('transfer(address,uint256)', 'approve(address,uint256)', 'allowance(address,address)',
+                'transferFrom(address,address,uint256)')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -618,9 +622,12 @@ def selector_checks(program, runtime, s):
     """The selector table is the entry list exactly; each forbidden call reverts and the
     state does not change; each required call gives the model result."""
     table = selector_table(runtime)
-    wanted = {st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
+    facade = WRITE_FACADE if 'transfer' in program.entries else ()
+    wanted = ({st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
+              | {st.selector(signature.split('(')[0], 0, signature) for signature in facade})
     require(table == wanted, f'{program.name}: selector table {sorted(table)} != entries {sorted(wanted)}')
-    for signature in FORBIDDEN:
+    # A FORBIDDEN signature of the Debreu write facade is an entry; table == wanted checks it.
+    for signature in (signature for signature in FORBIDDEN if signature not in facade):
         code = st.checked(['cast', 'sig', signature]).strip()[2:]
         actual = run(f'contract-{program.name}-{code}', runtime, code + f'{1:064x}' * 3, before=storage(s),
                      sender=wallet(4096), balance=s.balance)

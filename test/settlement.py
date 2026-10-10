@@ -24,7 +24,7 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                nonce='0x0000000000000000', timestamp='0x0', number='0x0',
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
-MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER = range(10)
+MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE = range(11)
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
@@ -32,9 +32,14 @@ DEBREU = ROOT / 'examples/arrow-debreu.lang'
 DEBREU_TOKEN = ROOT / 'examples/arrow-debreu-token.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
 TOKEN = '00' * 19 + 'b1'
-SIGNATURES = {'balanceOf': 'balanceOf(address)'}
+# The ERC-20 facade signatures (O5a, O5c). erc20Transfer is the key of the ERC-20
+# transfer(address,uint256), so that `transfer` stays the native transfer(uint256,uint256).
+SIGNATURES = {'balanceOf': 'balanceOf(address)', 'erc20Transfer': 'transfer(address,uint256)',
+              'approve': 'approve(address,uint256)', 'allowance': 'allowance(address,address)',
+              'transferFrom': 'transferFrom(address,address,uint256)'}
 TRANSFER = 'Transfer(address,address,uint256)'
 PAID = 'Paid(uint256,address,uint256,uint256)'
+APPROVAL = 'Approval(address,address,uint256)'
 LOGS = '#### LOGS ####'
 
 
@@ -103,6 +108,18 @@ def topic0(signature=TRANSFER):
 def transfer_log(source, target, value, address=RECEIVER):
     """The Transfer(source, target, value) record of the account at ADDRESS."""
     return (address, (topic0(), f'{source:064x}', f'{target:064x}'), f'{value:064x}')
+
+
+def approval_log(owner, spender, value, address=RECEIVER):
+    """The Approval(owner, spender, value) record of approve (O5c) at ADDRESS."""
+    return (address, (topic0(APPROVAL), f'{owner:064x}', f'{spender:064x}'), f'{value:064x}')
+
+
+@functools.cache
+def allowed(owner, spender):
+    """The slot of ALLOWANCE[OWNER][SPENDER] of the contract (O5c, MY CALL 168):
+    keccak256(spender . keccak256(owner . 10)), the Solidity nested mapping."""
+    return int(checked(['cast', 'index', 'uint256', str(spender), f'0x{slot(ALLOWANCE, owner):064x}']).strip(), 16)
 
 
 def paid_log(h, wallet, paid, moved, address=RECEIVER):
@@ -430,6 +447,32 @@ def debreu_example_cases():
             ('transfer-zero', data('transfer', 2, 0), base, None, 1, 0, one, [transfer_log(1, 2, 0)]),
             ('no-selector', 'aabbcc', base, None, None, 0, one),
             ('unknown', 'ffffffff', base, None, None, 0, one)]
+    # The ERC-20 write facade (O5c B1, MY CALL 172): identity 2 (wallet 4097) spends the
+    # allowance of identity 1; identity 3 has no wallet and profile 0.
+    a12, mu3 = allowed(1, 2), slot(MU, 3)
+    given = {**opened, a12: 5}
+    rows += [('erc20-transfer', data('erc20Transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10}, 1, 0, one,
+              [transfer_log(1, 2, 5)]),
+             ('erc20-transfer-wide', data('erc20Transfer', 2**160 + 2, 1), opened, None, None, 0, one),
+             ('approve', data('approve', 2, 5), base, {**base, a12: 5}, 1, 0, one, [approval_log(1, 2, 5)]),
+             ('approve-zero-spender', data('approve', 0, 5), base, None, None, 0, one),
+             ('approve-no-identity', data('approve', 2, 5), base, None, None, 0, SENDER),
+             ('approve-value', data('approve', 2, 5), base, None, None, 1, one),
+             ('allowance', data('allowance', 1, 2), {**base, a12: 5}, None, 5, 0, SENDER),
+             ('allowance-none', data('allowance', 1, 2), base, None, 0, 0, SENDER),
+             ('transferfrom', data('transferFrom', 1, 3, 3), given, {**given, a12: 2, mu1: 2, mu3: 3}, 1, 0,
+              two, [transfer_log(1, 3, 3)]),
+             ('transferfrom-all', data('transferFrom', 1, 3, 5), given, {**given, a12: 0, mu1: 0, mu3: 5}, 1, 0,
+              two, [transfer_log(1, 3, 5)]),
+             ('transferfrom-over-allowance', data('transferFrom', 1, 3, 4), {**opened, a12: 3}, None, None, 0, two),
+             ('transferfrom-over-mass', data('transferFrom', 1, 3, 6), {**opened, a12: 9}, None, None, 0, two),
+             ('transferfrom-restricted', data('transferFrom', 1, 3, 1), {**frozen, a12: 5}, None, None, 0, two),
+             ('transferfrom-to-zero', data('transferFrom', 1, 0, 1), given, None, None, 0, two),
+             ('transferfrom-from-zero', data('transferFrom', 0, 3, 1), {**opened, allowed(0, 2): 5, slot(MU, 0): 5},
+              None, None, 0, two),
+             ('transferfrom-no-identity', data('transferFrom', 1, 3, 1), given, None, None, 0, SENDER),
+             ('transferfrom-value', data('transferFrom', 1, 3, 1), given, None, None, 1, two),
+             ('transferfrom-owner', data('transferFrom', 1, 3, 1), opened, None, None, 0, one)]
     digits = interestc('verdicts', DEBREU, 'F').strip()
     for b in (1, 2, 3):
         vector = (b, b, b)
@@ -514,6 +557,9 @@ def impossibility_example_cases():
             ('balance-1', data('balanceOf', 1), base, None, 5, 0, SENDER),
             ('total-supply', data('totalSupply'), base, None, 5, 0, SENDER),
             ('total-supply-value', data('totalSupply'), base, None, None, 1, SENDER)]
+    # No write facade at impossibility (O5c, MY CALL 163): the selectors are unknown.
+    rows += [('transferfrom', data('transferFrom', 1, 2, 1), base, None, None, 0, one),
+             ('approve', data('approve', 2, 1), base, None, None, 0, one)]
     cases = table_cases('example-impossibility', runtime, rows)
     cases += paid_case('example-impossibility-withdraw', runtime, data('withdraw'), base, base, 0,
                        balance=0, sender=one, logs=[paid_log(1, 4096, 0, 0)])
@@ -599,6 +645,11 @@ def token_cases():
             ('distribute-token', data('distribute', 0), {**base, rent: 30, sale: 8},
              {**base, rent: 0, sale: 8, INDEX: 30}, 30, 'standard', stock, None, 0, SENDER, []),
             ('view-token-value', data('mass', 1), base, None, None, 'standard', stock, None, 1, SENDER, [])]
+    # The allowance surface in token mode (O5c, MY CALL 163): the same body as in wei mode.
+    a12 = allowed(1, 2)
+    rows += [('transferfrom', data('transferFrom', 1, 3, 3), {**base, a12: 5},
+              {**base, a12: 2, mu1: 2, slot(MU, 3): 3}, 1, 'standard', {}, None, 0, wallet(4097),
+              [transfer_log(1, 3, 3)])]
     cases = sum(token_case(f'example-debreu-token-{label}', runtime, calldata, before,
                            before if after is None else after, result, variant=variant, held=store,
                            moved=after_store, value=value, sender=sender, logs=logs)

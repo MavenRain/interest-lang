@@ -77,16 +77,18 @@ types of section 4, the operations of section 5 and the formers of section
 - a charter change outside `amend`;
 - an issuer change outside a charter;
 - a payout by floor division outside `withdraw`;
-- an allowance surface (`allowance`, `approve`, `transferFrom`);
 - document-hash data that changes W or R.
 
-The compiler writes the ERC-20 read facade (section 7). A program cannot add
-to it.
+The compiler writes the ERC-20 facade (section 7): the views,
+`transfer(address,uint256)`, and, at Debreu, the allowance surface
+`approve`, `allowance` and `transferFrom` (O5c). A program cannot add to
+it.
 
 The optional def `asset : AssetMode` selects the program asset: `wei`
 (native wei, the default when the def is absent) or `token` (the units of
-one ERC-20 carrier, O5b). The allowance surface stays refused in token mode:
-the contract calls `transferFrom` on the carrier, but it does not offer it.
+one ERC-20 carrier, O5b). The facade is the same in both modes. In token
+mode the contract also calls `transferFrom` on the carrier; that call is to
+another contract.
 
 A program that does not check is refused with a `TYPE_`, `LEX_` or `PARSE_`
 code (`docs/host/README.md`, section Refusals). A refusal is one line on
@@ -221,7 +223,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 - **Storage.** The `mu` mapping, the registry mapping (wallet to identity),
   the profile mapping, the active charter slot, `reserve[rent]`,
   `reserve[sale]`, the accrual index, the dust (O11), the carrier address
-  (CARRIER, slot 9, token mode only, O5b), and the checkpoint
+  (CARRIER, slot 9, token mode only, O5b), the allowance mapping
+  (ALLOWANCE, slot 10, keyed by owner then spender identity, O5c), and the checkpoint
   and numerator mappings for each identity. A mapping slot is `keccak256(key word, base
   slot word)`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
@@ -234,10 +237,13 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `distribute(kind)`, `withdraw()`, `transfer(to, q)`, `attest(w, h, p)`,
   `recover(from, to, q)`, `cast(b1..bn)` and `amend(b1..bn)`. The views are `mass(h)`, `supply()`,
   `claimOf(h)`, `charter()`, `reserve(kind)` and `selfConstituting()` (a
-  constant that the compiler computes). The ERC-20 read facade adds the
-  views `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). Each
-  argument is a `uint256` word, but the argument of `balanceOf` has the ABI
-  type `address`; the runtime reads it as the identity word.
+  constant that the compiler computes). The ERC-20 facade adds the views
+  `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). At Debreu
+  it also adds `transfer(address,uint256)` (the body of `transfer(to, q)`),
+  `approve(spender, v)`, `allowance(owner, spender)` and
+  `transferFrom(from, to, q)` (O5c). Each argument is a `uint256` word, but
+  a facade argument of ABI type `address` is an identity word below 2^160;
+  the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
   Ballots are call arguments (escrow-lang shape; no ballot authentication,
   O2). The identity of the caller is the registry image of the caller
@@ -248,8 +254,11 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   logs `Transfer(0, h, MU[h])` for each genesis identity with units. A
   successful `withdraw` logs one `Paid(h, wallet, paid, dust)` record
   (LOG3; `h` and the calling wallet are topics, `paid` and the moved dust
-  are the data), also at `paid = 0` (O11). No other entry logs, and a
-  revert logs nothing.
+  are the data), also at `paid = 0` (O11). A successful `transferFrom`
+  logs one `Transfer(from, to, q)` record and no `Approval` record. A
+  successful `approve` logs one `Approval(owner, spender, v)` record (LOG3;
+  `owner` and `spender` are identities), also at `v = 0` and at an
+  unchanged `v` (O5c). No other entry logs, and a revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
   guard reverts. A refused transfer (R fails, `q > mass h`, `to = 0`, or
@@ -261,6 +270,12 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   identity: the registry keeps `h + 1`, so the word 0 means that the
   wallet has no identity (O5b).
   Like `transfer`, `recover` settles both identities before it moves `mu`.
+  A refused `transferFrom` (an `address` word at or above 2^160, `from = 0`,
+  a caller with no identity, `q` above the allowance of the caller
+  identity, or a refused transfer from `from` to `to`) reverts and leaves
+  the state unchanged; `from = spender` also needs an allowance. `approve`
+  reverts at an `address` word at or above 2^160, at `spender = 0` and for
+  a caller with no identity (O5c).
   An entry of section 6 that has no meaning in
   the regime reverts.
   In token mode every entry reverts on value. A carrier call that fails,
