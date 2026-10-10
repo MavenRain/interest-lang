@@ -20,6 +20,10 @@ A third run uses the Debreu tables with the write facade (O5c): the model keeps 
 of each (owner, spender) identity pair, and each sequence ends with allowance(o, p) for the
 drawn pairs. Then the allowance laws on geth: approve changes only the allowance word, and
 transferFrom by the spender is transfer by from, less q of the allowance, or a revert.
+A fourth run draws vote and amend() with the moves (O2, MY CALL 190 (a)). After each call of
+each run, WEIGHT on geth is the image of mu along the ballots. Then the vote laws on geth (MY
+CALL 188): a vote moves only the ballot and WEIGHT, each move of q moves q of the tally, a moved
+mass votes once, and the holder of a Dirac measure takes all the seats.
 Uses the harness of settlement.py."""
 import dataclasses
 import functools
@@ -510,6 +514,16 @@ ALLOWANCE_ARGS = dict(ARGS, erc20Transfer=ARGS['transfer'],
 ALLOWANCE_CHOICES = CHOICES + ('approve',) * 5 + ('transferFrom',) * 6 + ('erc20Transfer',) * 2 + ('allowance',)
 ALLOWANCE_SEEDS, ALLOWANCE_LENGTH = range(201, 211), 20
 COVER_ALLOWANCE = {'approve+', 'transferFrom-moves', 'erc20Transfer+', 'transfer+'}
+# The vote run (O2, MY CALL 190 (a)): its own seeds, 10 sequences of 30 steps, the Debreu tables
+# with the write facade. The draws are vote (0 withdraws, 4 > k reverts), amend() alone, the 4
+# moves (with approve, so that transferFrom moves), attest and the views. vote-mass is a vote
+# for a code by an identity with mass; weight-moves is a call other than vote that moves WEIGHT.
+VOTE_ARGS = dict(ALLOWANCE_ARGS, vote=lambda r: (r.choice((0, 1, 1, 2, 2, 3, 3, 4)),), amend=lambda r: (),
+                 recover=lambda r: (r.choice((0, 1, 1, 2, 2)), r.randrange(0, 5), r.randrange(0, 6)))
+VOTE_CHOICES = (('vote',) * 6 + ('amend',) * 3 + ('transfer',) * 3 + ('erc20Transfer',) * 2 + ('approve',) * 2
+                + ('transferFrom',) * 3 + ('recover',) * 2 + ('attest',) + VIEWS)
+VOTE_SEEDS, VOTE_LENGTH = range(301, 311), 30
+COVER_VOTE = {'vote-mass', 'vote0', 'amend+', 'weight-moves'}
 
 
 def random_call(rng, args, payable=True, choices=CHOICES):
@@ -520,9 +534,9 @@ def random_call(rng, args, payable=True, choices=CHOICES):
 
 def calls_of(call):
     """The calls of a drawn CALL: an amend draw (b1, b2, b3) is vote(b1) by its sender, then
-    amend() (MY CALL 190 (a)); any other draw is one call."""
+    amend() (MY CALL 190 (a)); any other draw is one call (the amend() draw of the vote run too)."""
     name, args, sender, value = call
-    return [('vote', args[:1], sender, value), ('amend', (), sender, value)] if name == 'amend' else [call]
+    return [('vote', args[:1], sender, value), ('amend', (), sender, value)] if name == 'amend' and args else [call]
 
 
 def sequence(program, runtime, seed, length, args, choices=CHOICES):
@@ -542,6 +556,10 @@ def sequence(program, runtime, seed, length, args, choices=CHOICES):
             seen.add('transfer-to-zero-revert')
         if call[0] == 'transferFrom' and call[1][2] and model:
             seen.add('transferFrom-moves')
+        if call[0] == 'vote' and model and call[1][0] and s.mu.get(identity(s, call[2]), 0):
+            seen.add('vote-mass')
+        if call[0] != 'vote' and model and tally(storage(model[0])) != tally(storage(s)):
+            seen.add('weight-moves')
         pairs |= drawn_pair(s, call)
         deposits += (call[1][1] if program.token else call[3]) if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
@@ -553,6 +571,8 @@ def sequence(program, runtime, seed, length, args, choices=CHOICES):
                 f'{label}: the fold of the Transfer records {measure} != mu {s.mu}')
         require(laws_hold(program, *chain[:2], deposits, paid, recycled),
                 f'{label} {call}: conservation, sum to inflow or solvency fails on the geth state')
+        require(tally(chain[0]) == image(chain[0]),
+                f'{label} {call}: WEIGHT {tally(chain[0])} is not the image {image(chain[0])} of mu along the ballots')
         require(chain[0].get(CHARTER) == charter or call[0] == 'amend', f'{label}: {call[0]} wrote the charter')
         require(program.supply != 1 or [v for v in s.mu.values() if v] == [1], f'{label}: the measure is not a Dirac measure')
     for h in IDENTITIES:
@@ -571,6 +591,19 @@ def drawn_pair(s, call):
     if h is None or name not in ('approve', 'transferFrom'):
         return set()
     return {(h, args[0]) if name == 'approve' else (args[0], h)}
+
+
+def tally(words):
+    """The nonzero WEIGHT words: {c: WEIGHT[c]} for the codes c of 1 .. 3 (O2)."""
+    return {c: w for c, w in ((c, words.get(slot(WEIGHT, c), 0)) for c in (1, 2, 3)) if w}
+
+
+def image(words):
+    """The image of MU along BALLOT (MY CALL 183 (a)): {c: the sum of MU[h] over the identities h
+    with BALLOT[h] = c}, nonzero only."""
+    sums = ((c, sum(words.get(slot(MU, h), 0) for h in IDENTITIES if words.get(slot(BALLOT, h)) == c))
+            for c in (1, 2, 3))
+    return {c: w for c, w in sums if w}
 
 
 def geth_claims(words):
@@ -784,6 +817,62 @@ def allowance_laws(program, runtime):
     return 3 * len(vectors)
 
 
+def vote_laws(program, runtime):
+    """The vote laws on the geth state (MY CALL 188), from rich_debreu (identity 1 is the issuer
+    with mass 3, identity 2 has mass 7, charter open). recastMoves: identity 1 votes b, then b2;
+    each vote changes only the ballot of 1 and WEIGHT, and the tally is mass 1 at the code
+    (vote(0) withdraws). transferMovesVote: after each of the 4 moves the tally is the image of mu
+    along the ballots. noDoubleVote: 1 votes c, moves 2 to identity 2, 2 votes c2: the tally sums to
+    mass 1 + mass 2; then amend() gives the verdict of the seats of the geth tally, and the seats
+    sum to 3 with floor <= seat <= ceil of 3 w / W. -> the number of law vectors."""
+    one, two, base = wallet(4096), wallet(4097), rich_debreu(program)
+    m1, m2, start = base.mu.get(1, 0), base.mu.get(2, 0), at(base)
+    keys = {slot(BALLOT, 1)} | {slot(WEIGHT, c) for c in (1, 2, 3)}
+    for b, b2 in itertools.product((1, 2, 3), (0, 1, 2, 3)):
+        label = f'law-vote-recast-{b}{b2}'
+        s, first = check_step(f'{label}-vote', program, runtime, base, start, ('vote', (b,), one, 0))
+        second = check_step(label, program, runtime, s, first, ('vote', (b2,), one, 0))[1]
+        changed = {k for k in start[0].keys() | second[0].keys() if start[0].get(k) != second[0].get(k)}
+        require(tally(first[0]) == {b: m1} and tally(second[0]) == ({b2: m1} if b2 else {})
+                and changed <= keys and second[1] == start[1], f'{label}: the recast moved {sorted(changed)}')
+    # (calls before the move, the move): the moves of transfer, ERC-20 transfer, transferFrom and recover.
+    moves = (((), ('transfer', (2, 2), one, 0)), ((), ('transfer', (1, 4), two, 0)),
+             ((), ('transfer', (3, 1), one, 0)), ((), ('erc20Transfer', (2, 2), one, 0)),
+             ((('approve', (2, 2), one, 0),), ('transferFrom', (1, 2, 2), two, 0)),
+             ((), ('recover', (2, 1, 4), one, 0)))
+    for (c1, c2), (setup, move) in itertools.product(((1, 3), (2, 2), (3, 0)), moves):
+        label, s, chain = f'law-vote-image-{c1}{c2}-{move[0]}-{"".join(map(str, move[1]))}', base, start
+        for number, call in enumerate((('vote', (c1,), one, 0), ('vote', (c2,), two, 0)) + setup):
+            s, chain = check_step(f'{label}-{number}', program, runtime, s, chain, call)
+        moved, after = check_step(label, program, runtime, s, chain, move)
+        require(moved.mu != s.mu and tally(after[0]) == image(after[0]),
+                f'{label}: the move reverts, or WEIGHT {tally(after[0])} is not the image {image(after[0])}')
+    for c, c2 in itertools.product((1, 2, 3), repeat=2):
+        label, s, chain = f'law-vote-once-{c}{c2}', base, start
+        for number, call in enumerate((('vote', (c,), one, 0), ('transfer', (2, 2), one, 0), ('vote', (c2,), two, 0))):
+            s, chain = check_step(f'{label}-{number}', program, runtime, s, chain, call)
+        w = tally(chain[0])
+        held = seats(w)
+        after = check_step(f'{label}-amend', program, runtime, s, chain, ('amend', (), SENDER, 0))[0]
+        quota = all(3 * w.get(j, 0) // m <= n <= -(-3 * w.get(j, 0) // m) for j, n, m in zip((1, 2, 3), held, (m1 + m2,) * 3))
+        require(sum(w.values()) == m1 + m2 and w.get(c2, 0) >= m2 + 2 and sum(held) == 3 and quota
+                and after.charter == verdict(program, tuple(j for j, n in zip((1, 2, 3), held) for _ in range(n))),
+                f'{label}: the tally {w} counts the moved mass twice, or the seats {held} fail')
+    return 12 + 3 * len(moves) + 9
+
+
+def dirac_dictator(program, runtime):
+    """erc721-dirac (S = 1, MY CALL 188): the holder (identity 1) votes c, then amend(): the tally
+    is {c: 1}, the seats are (3 at c), and the charter is the verdict of (c, c, c). -> 3."""
+    for c in (1, 2, 3):
+        label, s = f'law-vote-dirac-{c}', genesis(program)
+        s, chain = check_step(f'{label}-vote', program, runtime, s, at(s), ('vote', (c,), wallet(4096), 0))
+        after = check_step(label, program, runtime, s, chain, ('amend', (), SENDER, 0))[0]
+        require(tally(chain[0]) == {c: 1} and after.charter == verdict(program, (c,) * 3),
+                f'{label}: the holder of the unit is not a dictator')
+    return 3
+
+
 def without(words, key):
     return {k: w for k, w in words.items() if k != key}
 
@@ -904,17 +993,23 @@ def main():
         seen |= sequence(program, runtime, seed, ALLOWANCE_LENGTH, ALLOWANCE_ARGS, ALLOWANCE_CHOICES)[1]
     require(COVER_ALLOWANCE <= seen, f'{program.name}: the sequences miss {sorted(COVER_ALLOWANCE - seen)}')
     allowed = allowance_laws(program, runtime)
+    voter, seen = dataclasses.replace(program, name='debreu-vote'), set()
+    for seed in VOTE_SEEDS:
+        seen |= sequence(voter, runtime, seed, VOTE_LENGTH, VOTE_ARGS, VOTE_CHOICES)[1]
+    require(COVER_VOTE <= seen, f'{voter.name}: the sequences miss {sorted(COVER_VOTE - seen)}')
     debreu, impossible, erc721 = built['debreu'], built['impossibility'], built['erc721']
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
-            + r_rejections(*debreu) + dust_recycle(*debreu) + dirac_vectors(*erc721))
+            + r_rejections(*debreu) + dust_recycle(*debreu) + dirac_vectors(*erc721)
+            + vote_laws(program, runtime) + dirac_dictator(*erc721))
     contract = (withdraw_moves_dust(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))
     print(f'CLAIMS sequences={sequences} steps={steps} laws={laws} contract={contract} geth=model OK'
           f' token: sequences={len(TOKEN_SEEDS)} steps={len(TOKEN_SEEDS) * TOKEN_LENGTH}'
           f' allowance: sequences={len(ALLOWANCE_SEEDS)} steps={len(ALLOWANCE_SEEDS) * ALLOWANCE_LENGTH}'
-          f' laws={allowed} (logs: {st.WORK})')
+          f' laws={allowed} vote: sequences={len(VOTE_SEEDS)} steps={len(VOTE_SEEDS) * VOTE_LENGTH}'
+          f' (logs: {st.WORK})')
 
 
 if __name__ == '__main__':
