@@ -28,6 +28,10 @@ MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, 
 # The ERC-721 facade (O5d, MY CALL 214): the slots OWNER, APPROVED and OPERATOR[owner][operator],
 # and the one token id.
 OWNER, APPROVED, OPERATOR = range(14, 17)
+# Rounds and the snapshot (O2b B3, MY CALL 243 (a)): the word ROUND (0 at genesis) and the mapping
+# SNAP[h]. A BALLOT or SNAP word holds the round tag ROUND + 1 in its high 128 bits.
+ROUND, SNAP = 17, 18
+TAG = 2 ** 128
 TOKEN_ID = 1
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
@@ -170,6 +174,21 @@ def parted(p, h):
     """The slot of PART[P][H] of the contract, the units of identity H in partition P (O4, MY
     CALL 202 (a)): keccak256(h . keccak256(p . 13))."""
     return nested(PART, p, h)
+
+
+def snapped(before, *identities):
+    """The SNAP words that a move writes (O2b B3, MY CALL 253 (a)): for each identity h with no
+    tag of the round in BEFORE, SNAP[h] := (ROUND + 1) 2^128 + MU[h] of BEFORE."""
+    tag = before.get(ROUND, 0) + 1
+    return {slot(SNAP, h): tag * TAG + before.get(slot(MU, h), 0) for h in identities
+            if before.get(slot(SNAP, h), 0) // TAG != tag}
+
+
+def closed(state, k=3):
+    """STATE after a successful amend (O2b B3, MY CALL 240 (a)): WEIGHT[1 .. k] := 0 and
+    ROUND := ROUND + 1."""
+    weights = {slot(WEIGHT, j) for j in range(1, k + 1)}
+    return {**{key: value for key, value in state.items() if key not in weights}, ROUND: state.get(ROUND, 0) + 1}
 
 
 def abi_text(value):
@@ -460,20 +479,27 @@ def debreu_example_cases():
     opened, frozen = {**base, CHARTER: 1}, {**base, CHARTER: 3}
     accredited = {**base, slot(PROFILE, 1): 1}
     attested = {slot(REGISTRY, 4099): 4, slot(PROFILE, 3): 2}
+    # A move copies the masses of both identities to SNAP before it moves (O2b B3, MY CALL 253 (a)).
+    admitted = {**base, mu1: 1, mu2: 9, p11: 1, p12: 7, **snapped(base, 1, 2)}
+    emptied = {**opened, mu1: 0, mu2: 10, p11: 0, p12: 8, **snapped(opened, 1, 2)}
+    drained = {**base, mu1: 0, mu2: 10, p11: 0, p12: 8, **snapped(base, 1, 2)}
+    returned = {**base, mu1: 8, mu2: 2, p11: 8, p12: 0, **snapped(base, 2, 1)}
+    recovered = {**base, mu2: 3, slot(MU, 3): 2, p12: 1, p13: 2, **snapped(base, 2, 3)}
     rows = [('deposit-rent', data('deposit', 0), base, {**base, slot(RESERVE, 0): 7}, 7, 7, one),
             ('deposit-sale', data('deposit', 1), {**base, slot(RESERVE, 1): 3},
              {**base, slot(RESERVE, 1): 7}, 7, 4, SENDER),
             ('deposit-kind', data('deposit', 2), base, None, None, 1, one),
             ('deposit-overflow', data('deposit', 0), {**base, slot(RESERVE, 0): 2**256 - 3}, None, None, 5, one),
-            ('transfer-admit', data('transfer', 2, 4), base, {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0, one,
+            ('transfer-admit', data('transfer', 2, 4), base, admitted, 1, 0, one,
              [transfer_log(1, 2, 4)]),
             ('transfer-limit', data('transfer', 2, 5), base, None, None, 0, one),
             ('transfer-frozen', data('transfer', 2, 1), frozen, None, None, 0, one),
-            ('transfer-open-all', data('transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1, 0,
+            ('transfer-open-all', data('transfer', 2, 5), opened, emptied, 1, 0,
              one, [transfer_log(1, 2, 5)]),
             ('transfer-over-mass', data('transfer', 2, 6), opened, None, None, 0, one),
-            ('transfer-self', data('transfer', 1, 3), base, None, 1, 0, one, [transfer_log(1, 1, 3)]),
-            ('transfer-second-wallet', data('transfer', 1, 3), base, {**base, mu1: 8, mu2: 2, p11: 8, p12: 0}, 1, 0,
+            ('transfer-self', data('transfer', 1, 3), base, {**base, **snapped(base, 1)}, 1, 0, one,
+             [transfer_log(1, 1, 3)]),
+            ('transfer-second-wallet', data('transfer', 1, 3), base, returned, 1, 0,
              three, [transfer_log(2, 1, 3)]),
             ('transfer-over-class', data('transfer', 1, 4), base, None, None, 0, three),
             ('transfer-no-identity', data('transfer', 2, 1), base, None, None, 0, SENDER),
@@ -489,14 +515,15 @@ def debreu_example_cases():
             ('attest-profile', data('attest', 4099, 3, 4), base, None, None, 0, one),
             ('attest-identity-wrap', data('attest', 4099, 2**256 - 1, 0), base, None, None, 0, one),
             ('attest-identity-zero', data('attest', 4099, 0, 2), base, None, None, 0, one),
-            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2, p12: 1, p13: 2}, 1, 0,
+            ('recover-issuer', data('recover', 2, 3, 2), base, recovered, 1, 0,
              one, [transfer_log(2, 3, 2)]),
-            ('recover-open', data('recover', 2, 1, 3), opened, {**opened, mu1: 8, mu2: 2, p11: 8, p12: 0}, 1, 0, one,
+            ('recover-open', data('recover', 2, 1, 3), opened, {**returned, CHARTER: 1}, 1, 0, one,
              [transfer_log(2, 1, 3)]),
             ('recover-over-class', data('recover', 2, 1, 5), opened, None, None, 0, one),
-            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1, 0, one,
+            ('recover-r-free', data('recover', 1, 2, 5), base, drained, 1, 0, one,
              [transfer_log(1, 2, 5)]),
-            ('recover-self', data('recover', 2, 2, 3), base, None, 1, 0, one, [transfer_log(2, 2, 3)]),
+            ('recover-self', data('recover', 2, 2, 3), base, {**base, **snapped(base, 2)}, 1, 0, one,
+             [transfer_log(2, 2, 3)]),
             ('recover-over-mass', data('recover', 2, 3, 6), base, None, None, 0, one),
             ('recover-non-issuer', data('recover', 1, 2, 1), base, None, None, 0, two),
             ('recover-frozen', data('recover', 2, 3, 1), frozen, None, None, 0, one),
@@ -520,15 +547,17 @@ def debreu_example_cases():
             ('balance-wide', data('balanceOf', 2**200), base, None, 0, 0, SENDER),
             ('total-supply', data('totalSupply'), base, None, 10, 0, SENDER),
             ('balance-value', data('balanceOf', 1), base, None, None, 1, SENDER),
-            ('transfer-zero', data('transfer', 2, 0), base, None, 1, 0, one, [transfer_log(1, 2, 0)]),
+            ('transfer-zero', data('transfer', 2, 0), base, {**base, **snapped(base, 1, 2)}, 1, 0, one,
+             [transfer_log(1, 2, 0)]),
             # The partition entries (O4 B3, MY CALL 206 (a)): the word p is 1 (classA) or 2 (classB).
             # R[classB] refuses a receiver with an even (retail) profile, also at open; `accredited`
             # gives identity 1 the profile 1. recoverByPartition is R free. The moves return p.
-            ('part-transfer-admit', by_partition(1, 2, 4), base, {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0,
+            ('part-transfer-admit', by_partition(1, 2, 4), base, admitted, 1, 0,
              one, partition_logs(1, one, 1, 2, 4)),
             ('part-transfer-limit', by_partition(1, 2, 5), base, None, None, 0, one),
             ('part-transfer-classb', by_partition(2, 1, 2), accredited,
-             {**accredited, mu1: 7, mu2: 3, p21: 2, p22: 0}, 2, 0, three, partition_logs(2, three, 2, 1, 2)),
+             {**accredited, mu1: 7, mu2: 3, p21: 2, p22: 0, **snapped(accredited, 2, 1)}, 2, 0, three,
+             partition_logs(2, three, 2, 1, 2)),
             ('part-transfer-classb-retail', by_partition(2, 1, 1), base, None, None, 0, three),
             ('part-transfer-classb-retail-open', by_partition(2, 1, 1), opened, None, None, 0, three),
             ('part-transfer-over-class-a', by_partition(1, 1, 4), accredited, None, None, 0, three),
@@ -539,14 +568,16 @@ def debreu_example_cases():
             ('part-transfer-value', by_partition(1, 2, 1), base, None, None, 1, one),
             ('part-transfer-short', by_partition(1, 2, 1)[:8 + 3 * 64 - 2], base, None, None, 0, one),
             ('part-transfer-no-tail', by_partition(1, 2, 4)[:8 + 3 * 64], base,
-             {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0, one, partition_logs(1, one, 1, 2, 4)),
+             admitted, 1, 0, one, partition_logs(1, one, 1, 2, 4)),
             ('part-transfer-to-wide', by_partition(1, 2**160, 1), base, None, None, 0, one),
             ('part-transfer-no-identity', by_partition(1, 2, 1), base, None, None, 0, SENDER),
-            ('part-transfer-self', by_partition(1, 1, 3), base, None, 1, 0, one, partition_logs(1, one, 1, 1, 3)),
+            ('part-transfer-self', by_partition(1, 1, 3), base, {**base, **snapped(base, 1)}, 1, 0, one,
+             partition_logs(1, one, 1, 1, 3)),
             ('part-recover-issuer', data('recoverByPartition', 1, 2, 3, 2), base,
-             {**base, mu2: 3, slot(MU, 3): 2, p12: 1, p13: 2}, 1, 0, one, partition_logs(1, one, 2, 3, 2)),
+             recovered, 1, 0, one, partition_logs(1, one, 2, 3, 2)),
             ('part-recover-r-free', data('recoverByPartition', 2, 2, 1, 2), base,
-             {**base, mu1: 7, mu2: 3, p21: 2, p22: 0}, 2, 0, one, partition_logs(2, one, 2, 1, 2)),
+             {**base, mu1: 7, mu2: 3, p21: 2, p22: 0, **snapped(base, 2, 1)}, 2, 0, one,
+             partition_logs(2, one, 2, 1, 2)),
             ('part-recover-over-class', data('recoverByPartition', 2, 2, 1, 3), base, None, None, 0, one),
             ('part-recover-non-issuer', data('recoverByPartition', 1, 1, 2, 1), base, None, None, 0, two),
             ('part-recover-word-0', data('recoverByPartition', 0, 2, 3, 1), base, None, None, 0, one),
@@ -571,7 +602,7 @@ def debreu_example_cases():
     # allowance of identity 1; identity 3 has no wallet and profile 0.
     a12, mu3 = allowed(1, 2), slot(MU, 3)
     given = {**opened, a12: 5}
-    rows += [('erc20-transfer', data('erc20Transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1,
+    rows += [('erc20-transfer', data('erc20Transfer', 2, 5), opened, emptied, 1,
               0, one,
               [transfer_log(1, 2, 5)]),
              ('erc20-transfer-wide', data('erc20Transfer', 2**160 + 2, 1), opened, None, None, 0, one),
@@ -585,9 +616,11 @@ def debreu_example_cases():
              ('symbol', data('symbol'), base, None, abi_text('AD'), 0, SENDER),
              ('decimals', data('decimals'), base, None, 0, 0, SENDER),
              ('transferfrom', data('transferFrom', 1, 3, 3), given,
-              {**given, a12: 2, mu1: 2, mu3: 3, p11: 2, p13: 3}, 1, 0, two, [transfer_log(1, 3, 3)]),
+              {**given, a12: 2, mu1: 2, mu3: 3, p11: 2, p13: 3, **snapped(given, 1, 3)}, 1, 0, two,
+              [transfer_log(1, 3, 3)]),
              ('transferfrom-all', data('transferFrom', 1, 3, 5), given,
-              {**given, a12: 0, mu1: 0, mu3: 5, p11: 0, p13: 5}, 1, 0, two, [transfer_log(1, 3, 5)]),
+              {**given, a12: 0, mu1: 0, mu3: 5, p11: 0, p13: 5, **snapped(given, 1, 3)}, 1, 0, two,
+              [transfer_log(1, 3, 5)]),
              ('transferfrom-over-allowance', data('transferFrom', 1, 3, 4), {**opened, a12: 3}, None, None, 0, two),
              ('transferfrom-over-mass', data('transferFrom', 1, 3, 6), {**opened, a12: 9}, None, None, 0, two),
              ('transferfrom-restricted', data('transferFrom', 1, 3, 1), {**frozen, a12: 5}, None, None, 0, two),
@@ -604,46 +637,67 @@ def debreu_example_cases():
         vector = (b, b, b)
         code = int(digits[vector_index(vector, 3)])
         # Both identities vote b (O2): WEIGHT[b] = 10, so the seats are the tally of (b, b, b).
-        voted = {**base, b1: b, b2: b, slot(WEIGHT, b): 10}
+        voted = {**base, b1: TAG + b, b2: TAG + b, slot(WEIGHT, b): 10}
         rows += [(f'cast-{b}', data('cast', *vector), base, None, code, 0, SENDER),
-                 (f'amend-{b}', data('amend'), voted, {**voted, CHARTER: code}, code, 0, SENDER),
+                 (f'amend-{b}', data('amend'), voted, {**closed(voted), CHARTER: code}, code, 0, SENDER),
                  (f'charter-after-amend-{b}', data('charter'), {**base, CHARTER: code}, None, code, 0, SENDER)]
     # The weighted vote (O2, MY CALLs 181 to 185). Identity 1 (wallet 4096) and identity 2
     # (wallet 4097) hold 5 units each; identity 3 has no wallet. n = 3 seats.
-    voted = {**base, b1: 1, w1: 5, b2: 2, w2: 5}
-    weighted = {**base, mu1: 8, mu2: 2, b1: 1, w1: 8, b2: 2, w2: 2}
-    hamilton = {**base, b1: 1, w1: 5, b2: 3, w3: 5}
+    voted = {**base, b1: TAG + 1, w1: 5, b2: TAG + 2, w2: 5}
+    weighted = {**base, mu1: 8, mu2: 2, b1: TAG + 1, w1: 8, b2: TAG + 2, w2: 2}
+    hamilton = {**base, b1: TAG + 1, w1: 5, b2: TAG + 3, w3: 5}
     seated = {seats: int(digits[vector_index(seats, 3)]) for seats in ((1, 1, 2), (1, 1, 3))}
-    rows += [('vote', data('vote', 1), base, {**base, b1: 1, w1: 5}, 1, 0, one),
-             ('vote-recast', data('vote', 3), {**base, b1: 1, w1: 5}, {**base, b1: 3, w3: 5}, 3, 0, one),
-             ('vote-withdraw', data('vote', 0), {**base, b1: 2, w2: 5}, base, 0, 0, one),
+    rows += [('vote', data('vote', 1), base, {**base, b1: TAG + 1, w1: 5}, 1, 0, one),
+             ('vote-recast', data('vote', 3), {**base, b1: TAG + 1, w1: 5}, {**base, b1: TAG + 3, w3: 5}, 3, 0, one),
+             ('vote-withdraw', data('vote', 0), {**base, b1: TAG + 2, w2: 5}, {**base, b1: TAG}, 0, 0, one),
              ('vote-no-identity', data('vote', 1), base, None, None, 0, SENDER),
              ('vote-bad-code', data('vote', 4), base, None, None, 0, one),
              ('vote-value', data('vote', 1), base, None, None, 1, one),
              ('vote-transfer', data('transfer', 2, 4), voted,
-              {**voted, mu1: 1, mu2: 9, w1: 1, w2: 9, p11: 1, p12: 7}, 1, 0, one, [transfer_log(1, 2, 4)]),
-             ('vote-erc20-transfer', data('erc20Transfer', 2, 5), {**opened, b1: 1, w1: 5, b2: 3, w3: 5},
-              {**opened, mu1: 0, mu2: 10, b1: 1, b2: 3, w3: 10, p11: 0, p12: 8}, 1, 0, one, [transfer_log(1, 2, 5)]),
-             ('vote-transferfrom', data('transferFrom', 1, 3, 3), {**given, b1: 1, w1: 5, b3: 2},
-              {**given, a12: 2, mu1: 2, mu3: 3, b1: 1, w1: 2, b3: 2, w2: 3, p11: 2, p13: 3}, 1, 0, two,
+              {**voted, mu1: 1, mu2: 9, p11: 1, p12: 7, **snapped(voted, 1, 2)}, 1, 0, one, [transfer_log(1, 2, 4)]),
+             ('vote-erc20-transfer', data('erc20Transfer', 2, 5), {**opened, b1: TAG + 1, w1: 5, b2: TAG + 3, w3: 5},
+              {**emptied, b1: TAG + 1, w1: 5, b2: TAG + 3, w3: 5}, 1, 0, one, [transfer_log(1, 2, 5)]),
+             ('vote-transferfrom', data('transferFrom', 1, 3, 3), {**given, b1: TAG + 1, w1: 5, b3: TAG + 2},
+              {**given, a12: 2, mu1: 2, mu3: 3, b1: TAG + 1, w1: 5, b3: TAG + 2, p11: 2, p13: 3,
+               **snapped(given, 1, 3)}, 1, 0, two,
               [transfer_log(1, 3, 3)]),
-             ('vote-recover', data('recover', 2, 3, 2), {**base, b2: 1, w1: 5, b3: 3},
-              {**base, mu2: 3, mu3: 2, b2: 1, w1: 3, b3: 3, w3: 2, p12: 1, p13: 2}, 1, 0, one,
+             ('vote-recover', data('recover', 2, 3, 2), {**base, b2: TAG + 1, w1: 5, b3: TAG + 3},
+              {**recovered, b2: TAG + 1, w1: 5, b3: TAG + 3}, 1, 0, one,
               [transfer_log(2, 3, 2)]),
              # W = 0 reverts (MY CALL 185); (8, 2, 0): floors (2, 0, 0), the seat left goes to the
              # larger remainder (code 2); (5, 0, 5): floors (1, 0, 1), the remainders tie, the seat
              # left goes to the lower code (seats (2, 0, 1), not (1, 0, 2)).
              ('amend-empty', data('amend'), base, None, None, 0, SENDER),
              ('amend-value', data('amend'), hamilton, None, None, 1, SENDER),
-             ('amend-weighted', data('amend'), weighted, {**weighted, CHARTER: seated[(1, 1, 2)]},
+             ('amend-weighted', data('amend'), weighted, {**closed(weighted), CHARTER: seated[(1, 1, 2)]},
               seated[(1, 1, 2)], 0, SENDER),
-             ('amend-hamilton', data('amend'), hamilton, {**hamilton, CHARTER: seated[(1, 1, 3)]},
+             ('amend-hamilton', data('amend'), hamilton, {**closed(hamilton), CHARTER: seated[(1, 1, 3)]},
               seated[(1, 1, 3)], 0, SENDER),
              # The quorum (O2b B2, MY CALL 238 (a)): the def quorum is 6 of S = 10. Identity 1 alone
              # (W = 5) reverts; identities 1 and 2 (W = 10, the tally (5, 5, 0)) give the seats (2, 1, 0).
-             ('amend-below-quorum', data('amend'), {**base, b1: 1, w1: 5}, None, None, 0, SENDER),
-             ('amend-quorum-met', data('amend'), voted, {**voted, CHARTER: seated[(1, 1, 2)]},
+             ('amend-below-quorum', data('amend'), {**base, b1: TAG + 1, w1: 5}, None, None, 0, SENDER),
+             ('amend-quorum-met', data('amend'), voted, {**closed(voted), CHARTER: seated[(1, 1, 2)]},
               seated[(1, 1, 2)], 0, SENDER)]
+    # Rounds and the snapshot (O2b B3, MY CALLs 239 and 240 (a)): a BALLOT or SNAP word with an old
+    # tag is no ballot and no snapshot. `moved` is the state after transfer(2, 4) by identity 1 in
+    # round 0: the snapshot keeps the masses 5 and 5 of the round.
+    s1, s2, s3 = slot(SNAP, 1), slot(SNAP, 2), slot(SNAP, 3)
+    rounded = {**base, ROUND: 1, b1: 2 * TAG + 1, w1: 5, b2: 2 * TAG + 2, w2: 5}
+    moved = {**base, mu1: 1, mu2: 9, p11: 1, p12: 7, s1: TAG + 5, s2: TAG + 5}
+    rows += [('amend-resets-round', data('amend'), rounded, {**closed(rounded), CHARTER: seated[(1, 1, 2)]},
+              seated[(1, 1, 2)], 0, SENDER),
+             ('vote-old-ballot', data('vote', 2), {**base, ROUND: 1, b1: TAG + 1},
+              {**base, ROUND: 1, b1: 2 * TAG + 2, w2: 5}, 2, 0, one),
+             ('vote-recast-round', data('vote', 3), {**base, ROUND: 1, b1: 2 * TAG + 1, w1: 5},
+              {**base, ROUND: 1, b1: 2 * TAG + 3, w3: 5}, 3, 0, one),
+             ('snapshot-transfer-after-vote', data('vote', 3), {**moved, b1: TAG + 1, w1: 5},
+              {**moved, b1: TAG + 3, w3: 5}, 3, 0, one),
+             ('snapshot-late-mass', data('vote', 2), moved, {**moved, b2: TAG + 2, w2: 5}, 2, 0, two),
+             ('snapshot-two-moves', data('transfer', 2, 1), moved, {**moved, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1, 0,
+              one, [transfer_log(1, 2, 1)]),
+             ('recover-snapshot', data('recover', 2, 3, 2), {**base, ROUND: 1, s2: TAG + 7},
+              {**base, ROUND: 1, mu2: 3, mu3: 2, p12: 1, p13: 2, s2: 2 * TAG + 5, s3: 2 * TAG}, 1, 0, one,
+              [transfer_log(2, 3, 2)])]
     return table_cases('example-debreu', runtime, rows) + accrual_cases(runtime, base)
 
 
@@ -672,7 +726,8 @@ def accrual_cases(runtime, base):
             ('claim-none', data('claimOf', 3), {**base, INDEX: 30}, None, 0, 0, SENDER),
             ('claim-wrap', data('claimOf', 1), {**base, INDEX: 2**255}, None, None, 0, SENDER),
             ('transfer-settles', data('transfer', 2, 4), accrued,
-             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3, parted(1, 1): 1, parted(1, 2): 7}, 1, 0,
+             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3, parted(1, 1): 1, parted(1, 2): 7,
+              **snapped(accrued, 1, 2)}, 1, 0,
              one, [transfer_log(1, 2, 4)]),
             ('transfer-settle-wrap', data('transfer', 2, 4), {**base, INDEX: 2**255}, None, None, 0, one)]
     cases = table_cases('accrual-debreu', runtime, rows)
@@ -830,18 +885,19 @@ def token_cases():
             ('distribute-token', data('distribute', 0), {**base, rent: 30, sale: 8},
              {**base, rent: 0, sale: 8, INDEX: 30}, 30, 'standard', stock, None, 0, SENDER, []),
             ('view-token-value', data('mass', 1), base, None, None, 'standard', stock, None, 1, SENDER, []),
-            ('vote', data('vote', 2), base, {**base, slot(BALLOT, 1): 2, slot(WEIGHT, 2): 5}, 2, 'standard', stock,
-             None, 0, one, [])]
+            ('vote', data('vote', 2), base, {**base, slot(BALLOT, 1): TAG + 2, slot(WEIGHT, 2): 5}, 2, 'standard',
+             stock, None, 0, one, [])]
     # The allowance surface in token mode (O5c, MY CALL 163): the same body as in wei mode.
     a12 = allowed(1, 2)
     rows += [('transferfrom', data('transferFrom', 1, 3, 3), {**base, a12: 5},
-              {**base, a12: 2, mu1: 2, slot(MU, 3): 3, parted(1, 1): 2, parted(1, 3): 3}, 1, 'standard', {}, None, 0,
-              wallet(4097),
+              {**base, a12: 2, mu1: 2, slot(MU, 3): 3, parted(1, 1): 2, parted(1, 3): 3, **snapped(base, 1, 3)}, 1,
+              'standard', {}, None, 0, wallet(4097),
               [transfer_log(1, 3, 3)])]
     # The partition entries in token mode (O4 B3): the same body as in wei mode. The token genesis
     # has no classB units (identity 2 holds 5 classA), so S_1 = 10.
     rows += [('part-transfer', by_partition(1, 2, 4), base,
-              {**base, mu1: 1, slot(MU, 2): 9, parted(1, 1): 1, parted(1, 2): 9}, 1, 'standard', {}, None, 0, one,
+              {**base, mu1: 1, slot(MU, 2): 9, parted(1, 1): 1, parted(1, 2): 9, **snapped(base, 1, 2)}, 1,
+              'standard', {}, None, 0, one,
               partition_logs(1, one, 1, 2, 4)),
              ('part-supply', data('totalSupplyByPartition', 1), base, None, 10, 'standard', {}, None, 0, SENDER, [])]
     cases = sum(token_case(f'example-debreu-token-{label}', runtime, calldata, before,
@@ -857,11 +913,13 @@ def erc721_cases():
     examples/erc721-dirac.lang: start open; identity 1 (wallet 4096, profile 0) holds the one unit
     and is OWNER; identity 2 (wallet 4097, profile 3) and identity 3 (wallet 4098, profile 0) hold
     none. A move of the unit writes OWNER := to and APPROVED := 0 and logs the LOG4
-    Transfer(from, to, 1); a move of q = 0 writes and logs nothing. -> (cases, deploys)."""
+    Transfer(from, to, 1); a move of q = 0 writes only the SNAP words (O2b B3) and logs nothing.
+    -> (cases, deploys)."""
     runtime = program_code('example-erc721', DIRAC, [(1, 1)], nft=True)
     base = data_storage(DIRAC) | {OWNER: 1}
     one, two, three = wallet(4096), wallet(4097), wallet(4098)
-    moved = {**base, slot(MU, 1): 0, slot(MU, 2): 1, parted(1, 1): 0, parted(1, 2): 1, OWNER: 2}
+    moved = {**base, slot(MU, 1): 0, slot(MU, 2): 1, parted(1, 1): 0, parted(1, 2): 1, OWNER: 2,
+             **snapped(base, 1, 2)}
     approved, operating = {**base, APPROVED: 2}, {**base, nested(OPERATOR, 1, 3): 1}
     frozen = {**base, CHARTER: 3}
     erc721, erc165 = 0x80ac58cd << 224, 0x01ffc9a7 << 224
@@ -906,7 +964,9 @@ def erc721_cases():
             ('supports-other', data('supportsInterface', 0xffffffff << 224), base, None, 0, 0, SENDER),
             ('supports-low', data('supportsInterface', erc721 | 1), base, None, None, 0, SENDER),
             ('transfer-one', data('transfer', 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)]),
-            ('transfer-zero', data('transfer', 2, 0), approved, None, 1, 0, one),
+            ('transfer-zero', data('transfer', 2, 0), approved, {**approved, **snapped(approved, 1, 2)}, 1, 0, one),
+            ('snapshot', data('transfer', 2, 1), {**approved, ROUND: 1},
+             {**moved, ROUND: 1, slot(SNAP, 1): 2 * TAG + 1, slot(SNAP, 2): 2 * TAG}, 1, 0, one, [nft_log(1, 2)]),
             ('recover-one', data('recover', 1, 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)]),
             ('safe-transfer', safe(1, 2), approved, moved, '', 0, one, [nft_log(1, 2)]),
             ('safe-transfer-data', safe(1, 2, b'abc'), approved, moved, '', 0, one, [nft_log(1, 2)]),
@@ -918,7 +978,8 @@ def erc721_cases():
     # The stub receiver (`evmtool receiver VARIANT`, MY CALL 219 (a)) at TOKEN: its address is the
     # identity word r (no attest: R at open admits each profile).
     r, operator, abc = int(TOKEN, 16), int(one, 16), int(b'abc'.hex().ljust(64, '0'), 16)
-    taken = {**base, slot(MU, 1): 0, slot(MU, r): 1, parted(1, 1): 0, parted(1, r): 1, OWNER: r}
+    taken = {**base, slot(MU, 1): 0, slot(MU, r): 1, parted(1, 1): 0, parted(1, r): 1, OWNER: r,
+             **snapped(base, 1, r)}
     stored = {0: operator, 1: 1, 2: TOKEN_ID, 3: 0x80}
     safe_rows = [('accept', 'accept', safe(1, r), taken, stored),
                  ('data-accept', 'accept', safe(1, r, b'abc'), taken, {**stored, 4: 3, 5: abc}),
@@ -981,7 +1042,7 @@ def main(write_gas):
         decision = verdict(members, codes, vectors[0], k)
         # The stored weights of the ballots vectors[0] (O2): W = n, so the seats are their tally.
         weights = {slot(WEIGHT, b): vectors[0].count(b) for b in set(vectors[0])}
-        expect(f'amend-{name}', code, data('amend'), weights, {**weights, CHARTER: decision}, decision)
+        expect(f'amend-{name}', code, data('amend'), weights, {**closed(weights, k), CHARTER: decision}, decision)
         cases += 1
     _, members, codes, _ = l1_case(3, 63)
     deploy('debreu-n63-deploy', bytecode('creation', members, 'debreu', *codes),

@@ -21,9 +21,10 @@ of each (owner, spender) identity pair, and each sequence ends with allowance(o,
 drawn pairs. Then the allowance laws on geth: approve changes only the allowance word, and
 transferFrom by the spender is transfer by from, less q of the allowance, or a revert.
 A fourth run draws vote and amend() with the moves (O2, MY CALL 190 (a)). After each call of
-each run, WEIGHT on geth is the image of mu along the ballots. Then the vote laws on geth (MY
-CALL 188): a vote moves only the ballot and WEIGHT, each move of q moves q of the tally, a moved
-mass votes once, and the holder of a Dirac measure takes all the seats.
+each run, WEIGHT on geth is the image of the snapshot mass along the ballots of the round (O2b).
+Then the vote laws on geth (MY CALL 188): a vote moves only the ballot and WEIGHT, a move keeps
+the tally the image of the snapshot mass, a moved mass votes once, and the holder of a Dirac
+measure takes all the seats.
 Uses the harness of settlement.py."""
 import dataclasses
 import functools
@@ -35,7 +36,7 @@ import sys
 
 import settlement as st
 from settlement import (ALLOWANCE, BALLOT, CARRIER, CHARTER, CHECKPOINT, DUST, INDEX, MU, NUM, PROFILE, REGISTRY,
-                        RESERVE, SENDER, WEIGHT, data, require, run, slot, vector_index, wallet)
+                        RESERVE, ROUND, SENDER, SNAP, TAG, WEIGHT, data, require, run, slot, vector_index, wallet)
 
 WORD = 2**256
 BASE = 10**24
@@ -166,7 +167,9 @@ class State:
     In token mode CARRIER is the carrier address and TOKEN the carrier storage words of
     the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None.
     ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c). BALLOT maps an
-    identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2).
+    identity to t 2^128 + c, its code c in the round of tag t = ROUND + 1 (O2b; an old tag is no
+    ballot), and WEIGHT a code to the mass of its voters (O2). ROUND counts the successful amends
+    and SNAP maps an identity to t 2^128 + its mass at the start of the round of tag t (O2b).
     PART maps a (partition, identity) pair to its units (O4); the moves use CLASS_A. OWNER and
     APPROVED are the words of the erc721 facade (O5d B2): the identity of the one unit and the
     approved identity. OPERATOR maps an (owner, operator) identity pair to 0 or 1 (O5d B4)."""
@@ -185,6 +188,8 @@ class State:
     allowance: dict = dataclasses.field(default_factory=dict)
     ballot: dict = dataclasses.field(default_factory=dict)
     weight: dict = dataclasses.field(default_factory=dict)
+    round: int = 0
+    snap: dict = dataclasses.field(default_factory=dict)
     part: dict = dataclasses.field(default_factory=dict)
     owner: int = 0
     approved: int = 0
@@ -213,7 +218,7 @@ def genesis(program):
 
 def storage(s):
     """The storage words of state S (zero words left out)."""
-    words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust, CARRIER: s.carrier,
+    words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust, CARRIER: s.carrier, ROUND: s.round,
              st.OWNER: s.owner, st.APPROVED: s.approved,
              **{slot(MU, h): u for h, u in s.mu.items()},
              **{slot(REGISTRY, w): v for w, v in s.registry.items()},
@@ -224,6 +229,7 @@ def storage(s):
              **{allowance_word(o, p): v for (o, p), v in s.allowance.items()},
              **{slot(BALLOT, h): c for h, c in s.ballot.items()},
              **{slot(WEIGHT, c): w for c, w in s.weight.items()},
+             **{slot(SNAP, h): v for h, v in s.snap.items()},
              **{st.parted(p, h): u for (p, h), u in s.part.items()},
              **{st.nested(st.OPERATOR, o, p): b for (o, p), b in s.operator.items()}}
     return {key: value for key, value in words.items() if value}
@@ -424,9 +430,21 @@ def supports_interface(program, s, sender, value, word):
     return None if word % 2**224 else (s, int(word >> 224 in (0x01ffc9a7, 0x80ac58cd)))
 
 
+def current(word, t, other):
+    """The low 128 bits of WORD when its tag (the high 128 bits) is T, else OTHER (O2b)."""
+    return word % TAG if word // TAG == t else other
+
+
+def snapshot(s, h):
+    """The lazy copy (O2b, MY CALL 239 (a)): SNAP[h] := t 2^128 + MU[h] when the tag of SNAP[h] is
+    not t = ROUND + 1, so SNAP[h] holds the mass of h at the start of the round."""
+    t = s.round + 1
+    return s if s.snap.get(h, 0) // TAG == t else dataclasses.replace(s, snap={**s.snap, h: t * TAG + s.mu.get(h, 0)})
+
+
 def move(s, h, to, q, p=CLASS_A, facade=False):
     """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
-    vote of q moves from the ballot of h to the ballot of to (O2); then the same debit and
+    snapshot copy of h, then of to, comes first (O2b; the vote does not move); then the same debit and
     credit of PART[p] (O4 B2: classA; O4 B3: the partition p). At the erc721 facade (O5d B2,
     transferNft) a nonzero move requires to < 2**160, then sets OWNER := to and APPROVED := 0;
     q = 0 writes neither."""
@@ -436,11 +454,11 @@ def move(s, h, to, q, p=CLASS_A, facade=False):
     second = None if first is None else settle(first, to)
     if second is None:
         return None
-    debited = {**second.mu, h: second.mu.get(h, 0) - q}
-    weight = shift(second.weight, second.ballot.get(h, 0), second.ballot.get(to, 0), q)
-    taken = {**second.part, (p, h): second.part.get((p, h), 0) - q}
+    copied = snapshot(snapshot(second, h), to)
+    debited = {**copied.mu, h: copied.mu.get(h, 0) - q}
+    taken = {**copied.part, (p, h): copied.part.get((p, h), 0) - q}
     nft = dict(owner=to, approved=0) if facade and q else {}
-    return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight,
+    return dataclasses.replace(copied, mu={**debited, to: debited.get(to, 0) + q},
                                part={**taken, (p, to): taken.get((p, to), 0) + q}, **nft), 1
 
 
@@ -486,13 +504,16 @@ def shift(weight, old, new, q):
 
 
 def vote(program, s, sender, value, c):
-    """vote(c) (O2): the mass of h = id(caller) moves in WEIGHT from BALLOT[h] to c (vote(0)
-    withdraws the ballot); BALLOT[h] := c; no identity and c > k revert."""
+    """vote(c) (O2; O2b, MY CALLs 239 and 240 (a)): t = ROUND + 1; the weight of h = id(caller) is
+    its snapshot mass when the tag of SNAP[h] is t, else MU[h]; it moves in WEIGHT from the code
+    of BALLOT[h] when its tag is t (else no code) to c (vote(0) withdraws the ballot); BALLOT[h]
+    := t 2^128 + c; no identity and c > k revert."""
     h = identity(s, sender)
     if h is None or c > 3:
         return None
-    weight = shift(s.weight, s.ballot.get(h, 0), c, s.mu.get(h, 0))
-    return dataclasses.replace(s, ballot={**s.ballot, h: c}, weight=weight), c
+    t = s.round + 1
+    weight = shift(s.weight, current(s.ballot.get(h, 0), t, 0), c, current(s.snap.get(h, 0), t, s.mu.get(h, 0)))
+    return dataclasses.replace(s, ballot={**s.ballot, h: t * TAG + c}, weight=weight), c
 
 
 def seats(weight):
@@ -508,10 +529,11 @@ def seats(weight):
 
 def amend(program, s, sender, value):
     """amend() (O2): active charter := the verdict of the seat vector; W < q reverts (O2b; q = 1
-    without a def quorum, so W = 0); mu, the ballots and the treasury do not move."""
+    without a def quorum, so W = 0); mu, the ballots and the treasury do not move; then the next
+    round (O2b, MY CALL 240 (a)): WEIGHT := 0 and ROUND := ROUND + 1."""
     held = seats(s.weight) if sum(s.weight.get(c, 0) for c in (1, 2, 3)) >= program.quorum else None
     v = None if held is None else verdict(program, tuple(c for c, n in zip((1, 2, 3), held) for _ in range(n)))
-    return None if v is None else (dataclasses.replace(s, charter=v), v)
+    return None if v is None else (dataclasses.replace(s, charter=v, weight={}, round=s.round + 1), v)
 
 
 def view(name):
@@ -746,7 +768,8 @@ def sequence(program, runtime, seed, length, args, choices=CHOICES):
         require(laws_hold(program, *chain[:2], deposits, paid, recycled),
                 f'{label} {call}: conservation, sum to inflow or solvency fails on the geth state')
         require(tally(chain[0]) == image(chain[0]),
-                f'{label} {call}: WEIGHT {tally(chain[0])} is not the image {image(chain[0])} of mu along the ballots')
+                f'{label} {call}: WEIGHT {tally(chain[0])} is not the image {image(chain[0])} of the '
+                'snapshot mass along the ballots of the round')
         require(chain[0].get(CHARTER) == charter or call[0] == 'amend', f'{label}: {call[0]} wrote the charter')
         require(program.supply != 1 or [v for v in s.mu.values() if v] == [1], f'{label}: the measure is not a Dirac measure')
     for h in IDENTITIES:
@@ -773,10 +796,12 @@ def tally(words):
 
 
 def image(words):
-    """The image of MU along BALLOT (MY CALL 183 (a)): {c: the sum of MU[h] over the identities h
-    with BALLOT[h] = c}, nonzero only."""
-    sums = ((c, sum(words.get(slot(MU, h), 0) for h in IDENTITIES if words.get(slot(BALLOT, h)) == c))
-            for c in (1, 2, 3))
+    """The image of the snapshot mass along the ballots of the round (O2b, MY CALL 245 (a)): {c:
+    the sum of the mass of h over the identities h with BALLOT[h] = t 2^128 + c}, t = ROUND + 1;
+    the mass of h is the low 128 bits of SNAP[h] when its tag is t, else MU[h]; nonzero only."""
+    t = words.get(ROUND, 0) + 1
+    mass = lambda h: current(words.get(slot(SNAP, h), 0), t, words.get(slot(MU, h), 0))
+    sums = ((c, sum(mass(h) for h in IDENTITIES if words.get(slot(BALLOT, h), 0) == t * TAG + c)) for c in (1, 2, 3))
     return {c: w for c, w in sums if w}
 
 
@@ -862,18 +887,21 @@ def transfer_then_distribute(program, runtime):
 
 def amend_law(program, runtime):
     """At a rich state, identity 1 (mass 3) votes b1 and identity 2 (mass 7) votes b2, for each
-    (b1, b2); then amend() changes storage only at CHARTER, the wei stays, and the charter is the
-    verdict of (b1, b2, b2) (O2: the largest remainder gives b1 1 seat and b2 2 seats)."""
+    (b1, b2); then amend() changes storage only at CHARTER, ROUND and WEIGHT (O2b: the next round), the wei stays,
+    and the charter is the verdict of the seats of the image of the snapshot mass along the
+    ballots (O2b: the votes weigh the masses at the start of the round, MY CALL 254 (a))."""
     base, count = rich_debreu(program), 0
-    rest = lambda words: {key: value for key, value in words.items() if key != CHARTER}
+    reset = {CHARTER, ROUND, *(slot(WEIGHT, c) for c in (1, 2, 3))}
+    rest = lambda words: {key: value for key, value in words.items() if key not in reset}
     for ballots in itertools.product((1, 2, 3), repeat=2):
         label, s, chain = f'law-amend-{"".join(map(str, ballots))}', base, at(base)
         for h, (b, sender) in enumerate(zip(ballots, (wallet(4096), wallet(4097))), 1):
             s, chain = check_step(f'{label}-vote-{h}', program, runtime, s, chain, ('vote', (b,), sender, 0))
         after, moved = check_step(label, program, runtime, s, chain, ('amend', (), SENDER, 0))
+        held = seats(image(chain[0]))
         require(rest(moved[0]) == rest(chain[0]) and moved[1] == chain[1]
-                and after.charter == verdict(program, (ballots[0],) + (ballots[1],) * 2),
-                f'law-amend {ballots}: amend moved a word other than the charter')
+                and after.charter == verdict(program, tuple(c for c, n in zip((1, 2, 3), held) for _ in range(n))),
+                f'law-amend {ballots}: amend moved a word other than the charter, ROUND and WEIGHT')
         count += 1
     return count
 
@@ -1008,21 +1036,23 @@ def allowance_laws(program, runtime):
 
 def vote_laws(program, runtime):
     """The vote laws on the geth state (MY CALL 188), from rich_debreu (identity 1 is the issuer
-    with mass 3, identity 2 has mass 7, charter open). recastMoves: identity 1 votes b, then b2;
-    each vote changes only the ballot of 1 and WEIGHT, and the tally is mass 1 at the code
-    (vote(0) withdraws). transferMovesVote: after each of the 4 moves the tally is the image of mu
-    along the ballots. noDoubleVote: 1 votes c, moves 2 to identity 2, 2 votes c2: the tally sums to
-    mass 1 + mass 2; then amend() gives the verdict of the seats of the geth tally, and the seats
-    sum to 3 with floor <= seat <= ceil of 3 w / W. -> the number of law vectors."""
+    with mass 3, identity 2 has mass 7, charter open). A vote weighs the mass at the start of the
+    round (O2b): rich_debreu moves 2 units in round 1, so the round-start masses n1 and n2 are the
+    genesis masses. recastMoves: identity 1 votes b, then b2; each vote changes only the ballot of
+    1 and WEIGHT, and the tally is n1 at the code (vote(0) withdraws). transferMovesVote: after
+    each of the 4 moves the tally is the image of the snapshot mass along the ballots.
+    noDoubleVote: 1 votes c, moves 2 to identity 2, 2 votes c2: the tally sums to n1 + n2 (the
+    moved mass votes once); then amend() gives the verdict of the seats of the geth tally, and the
+    seats sum to 3 with floor <= seat <= ceil of 3 w / W. -> the number of law vectors."""
     one, two, base = wallet(4096), wallet(4097), rich_debreu(program)
-    m1, m2, start = base.mu.get(1, 0), base.mu.get(2, 0), at(base)
+    (n1, n2), start = (current(base.snap.get(h, 0), base.round + 1, base.mu.get(h, 0)) for h in (1, 2)), at(base)
     keys = {slot(BALLOT, 1)} | {slot(WEIGHT, c) for c in (1, 2, 3)}
     for b, b2 in itertools.product((1, 2, 3), (0, 1, 2, 3)):
         label = f'law-vote-recast-{b}{b2}'
         s, first = check_step(f'{label}-vote', program, runtime, base, start, ('vote', (b,), one, 0))
         second = check_step(label, program, runtime, s, first, ('vote', (b2,), one, 0))[1]
         changed = {k for k in start[0].keys() | second[0].keys() if start[0].get(k) != second[0].get(k)}
-        require(tally(first[0]) == {b: m1} and tally(second[0]) == ({b2: m1} if b2 else {})
+        require(tally(first[0]) == {b: n1} and tally(second[0]) == ({b2: n1} if b2 else {})
                 and changed <= keys and second[1] == start[1], f'{label}: the recast moved {sorted(changed)}')
     # (calls before the move, the move): the moves of transfer, ERC-20 transfer, transferFrom and recover.
     moves = (((), ('transfer', (2, 2), one, 0)), ((), ('transfer', (1, 4), two, 0)),
@@ -1043,8 +1073,8 @@ def vote_laws(program, runtime):
         w = tally(chain[0])
         held = seats(w)
         after = check_step(f'{label}-amend', program, runtime, s, chain, ('amend', (), SENDER, 0))[0]
-        quota = all(3 * w.get(j, 0) // m <= n <= -(-3 * w.get(j, 0) // m) for j, n, m in zip((1, 2, 3), held, (m1 + m2,) * 3))
-        require(sum(w.values()) == m1 + m2 and w.get(c2, 0) >= m2 + 2 and sum(held) == 3 and quota
+        quota = all(3 * w.get(j, 0) // m <= n <= -(-3 * w.get(j, 0) // m) for j, n, m in zip((1, 2, 3), held, (n1 + n2,) * 3))
+        require(sum(w.values()) == n1 + n2 and w.get(c2, 0) >= n2 and sum(held) == 3 and quota
                 and after.charter == verdict(program, tuple(j for j, n in zip((1, 2, 3), held) for _ in range(n))),
                 f'{label}: the tally {w} counts the moved mass twice, or the seats {held} fail')
     return 12 + 3 * len(moves) + 9
@@ -1096,14 +1126,16 @@ def selector_checks(program, runtime, s):
 
 def dirac_vectors(program, runtime):
     """examples/erc721-dirac.lang (S = 1): after each step one identity holds the one unit, the
-    restricted charter admits an accredited receiver only, and withdraw keeps no remainder."""
+    restricted charter admits an accredited receiver only, and withdraw keeps no remainder. The
+    vote weighs the mass at the start of the round (O2b), so one, not two, decides the round in
+    which the unit moves to two."""
     one, two = wallet(4096), wallet(4097)
     calls = (('deposit', (0,), SENDER, 9, 9), ('distribute', (0,), SENDER, 0, 9), ('claimOf', (1,), SENDER, 0, 9),
              ('transfer', (2, 2), one, 0, None), ('cast', (2, 3, 2), SENDER, 0, 3), ('vote', (2,), one, 0, 2),
              ('amend', (), SENDER, 0, 2), ('transfer', (3, 1), one, 0, None), ('transfer', (2, 1), one, 0, 1),
              ('transfer', (1, 1), two, 0, None), ('deposit', (1,), SENDER, 4, 4), ('distribute', (1,), SENDER, 0, 4),
              ('claimOf', (2,), SENDER, 0, 4), ('withdraw', (), one, 0, 9), ('withdraw', (), two, 0, 4),
-             ('vote', (3,), two, 0, 3), ('amend', (), SENDER, 0, 3), ('transfer', (1, 1), two, 0, None),
+             ('vote', (3,), one, 0, 3), ('amend', (), SENDER, 0, 3), ('transfer', (1, 1), two, 0, None),
              ('deposit', (0,), SENDER, 5, 5), ('distribute', (0,), SENDER, 0, 0))
     s, chain = genesis(program), at(genesis(program))
     for number, (name, args, sender, value, want) in enumerate(calls):

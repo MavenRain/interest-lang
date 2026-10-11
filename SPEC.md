@@ -315,10 +315,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   mappings for each identity (slots 6 and 7), the dust (DUST, slot 8,
   O11), the carrier address (CARRIER, slot 9, token mode only, O5b), the
   allowance mapping (ALLOWANCE, slot 10, keyed by owner then spender
-  identity, O5c), the ballot mapping (BALLOT, slot 11, identity to code 0
-  to k, 0 = no ballot), the weight mapping (WEIGHT, slot 12, code to mass)
-  (O2) and the partition mapping (PART, slot 13, keyed by partition code
-  then identity, O4). At the `erc721` facade (O5d), the storage also has
+  identity, O5c), the ballot mapping (BALLOT, slot 11, identity to t 2^128
+  + c, the code c of 0 to k in the round of tag t, 0 = no ballot), the
+  weight mapping (WEIGHT, slot 12, code to mass) (O2), the partition
+  mapping (PART, slot 13, keyed by partition code then identity, O4), the
+  round counter (ROUND, slot 17, the number of successful amends) and the
+  snapshot mapping (SNAP, slot 18, identity to t 2^128 + the mass of the
+  identity at the start of the round of tag t) (O2b). The current round
+  has the tag t = ROUND + 1. A BALLOT or SNAP word with a different tag is
+  no ballot and no snapshot. At the `erc721` facade (O5d), the storage also has
   the owner identity of the one unit (OWNER, slot 14), the approved
   identity (APPROVED, slot 15, 0 = none) and the operator mapping
   (OPERATOR, slot 16, keyed by owner then operator identity). A mapping
@@ -356,13 +361,19 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   A facade argument of ABI type `address` is an identity word below 2^160;
   the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
-  A ballot is the stored code of the caller identity (O2). `vote(c)` sets
-  BALLOT[h] and moves MU[h] in WEIGHT. `transfer`, `transferFrom`,
-  `recover` and the two partition moves move q from WEIGHT[BALLOT[from]]
-  to WEIGHT[BALLOT[to]], and in PART[p] (p = classA without a partition
-  word, O4).
+  A ballot is the stored code of the caller identity in the current round
+  (O2, O2b). `vote(c)` sets BALLOT[h] := t 2^128 + c and moves the weight
+  of h in WEIGHT from the code of the old ballot (no code when its tag is
+  not t) to c. The weight of h is the low 128 bits of SNAP[h] when its tag
+  is t, else MU[h]: the mass of h at the start of the round. Each move
+  (`transfer`, `transferFrom`, `recover`, the two partition moves and the
+  moves of the facades) first copies the snapshot of from, then of to
+  (SNAP[h] := t 2^128 + MU[h] when the tag of SNAP[h] is not t). Then it
+  moves q in MU and in PART[p] (p = classA without a partition word, O4).
+  A move does not change WEIGHT or a ballot.
   `amend()` gives the n seats of WEIGHT by the largest remainder (ties to
-  the lower code) and reads the verdict table. The identity of the caller is the registry image of the caller
+  the lower code) and reads the verdict table. Then it sets WEIGHT to 0
+  and adds 1 to ROUND, so the next round starts with no ballot. The identity of the caller is the registry image of the caller
   address; `to` is an identity (O10).
   At the `erc721` facade (O5d, MY CALLs 214 to 217), the Debreu table is
   `debreu_erc721` (32 rows). It has the entries and views above without
@@ -415,8 +426,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   and `recoverByPartition`, and classA for `transfer`, `transferFrom` and
   `recover`; `mass h` and MU[h] remain the total across both partitions.
   `attest` reverts at `h = 0`. `vote` reverts at identity
-  0, at c > k and on value. `amend()` reverts when the WEIGHT sum is below
-  the quorum q (the def `quorum`; absent: 1, so a sum of 0).
+  0, at c > k and on value. `amend()` reverts when the WEIGHT sum (the ballots of
+  the current round) is below the quorum q (the def `quorum`; absent: 1, so a sum of 0).
   Identity 0 is no
   identity: the registry keeps `h + 1`, so the word 0 means that the
   wallet has no identity (O5b).

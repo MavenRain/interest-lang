@@ -43,7 +43,7 @@ enum {
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
   SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10, SLOT_BALLOT = 11,
   SLOT_WEIGHT = 12, SLOT_PART = 13, SLOT_OWNER = 14, SLOT_APPROVED = 15,
-  SLOT_OPERATOR = 16
+  SLOT_OPERATOR = 16, SLOT_ROUND = 17, SLOT_SNAP = 18
 };
 
 /* The one token id of the ERC-721 facade (O5d, MY CALL 215 (a)). */
@@ -747,21 +747,62 @@ static void weight_term(Asm *a, Op op) {
   asm_op(a, OP_POP);
 }
 
-/* from to q -> (nothing) (O2, MY CALL 183 (a)): the vote moves with the
- * mass: WEIGHT[BALLOT[from]] -= q, then WEIGHT[BALLOT[to]] += q (code 0:
- * no term). The caller checks q <= PART[classA][from] <= MU[from] first;
- * WEIGHT[BALLOT[from]] includes MU[from], so the debit does not wrap. */
-static void move_vote(Asm *a) {
+/* (nothing) -> t = ROUND + 1, the tag of the current round (O2b, MY CALLs
+ * 239 and 240 (a)). A BALLOT or SNAP word with the tag t in its high 128
+ * bits belongs to the round; the zero word has no tag. */
+static void push_round_tag(Asm *a) {
+  asm_push(a, SLOT_ROUND);
+  asm_op(a, OP_SLOAD);
+  asm_push(a, 1);
+  asm_op(a, OP_ADD);
+}
+
+/* (nothing) -> 2^128, the unit of the tag. */
+static void push_tag_unit(Asm *a) {
+  unsigned char word[WORD] = {0};
+  word[15] = 1;
+  asm_push_word(a, word);
+}
+
+/* x -> the tag of x (the high 128 bits). */
+static void tag_of(Asm *a) {
+  asm_push(a, 128);
+  asm_op(a, OP_SHR);
+}
+
+/* x -> the low 128 bits of x. */
+static void low_of(Asm *a) {
+  push_tag_unit(a);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_MOD);
+}
+
+/* t h -> t (O2b, MY CALL 239 (a)): the lazy copy of the snapshot. When the
+ * tag of SNAP[h] is not t, SNAP[h] := t 2^128 + MU[h]. Each move calls it
+ * for from and for to before MU changes, so SNAP[h] holds the mass of h at
+ * the round start. The vote does not move with the mass. mass < 2^75 (KL4),
+ * so it fits the low 128 bits. */
+static void snapshot_copy(Asm *a) {
+  Label done = asm_label(a);
+  asm_op(a, OP_DUP1);
+  asm_slot(a, SLOT_SNAP);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  tag_of(a);
+  asm_op(a, OP_DUP4);
+  asm_op(a, OP_EQ);
+  asm_jump_if(a, done);
   asm_op(a, OP_DUP3);
-  asm_slot(a, SLOT_BALLOT);
+  push_tag_unit(a);
+  asm_op(a, OP_MUL);
+  asm_op(a, OP_DUP3);
+  asm_slot(a, SLOT_MU);
   asm_op(a, OP_SLOAD);
+  asm_op(a, OP_ADD);
   asm_op(a, OP_DUP2);
-  weight_term(a, OP_SUB);
-  asm_op(a, OP_SWAP1);
-  asm_slot(a, SLOT_BALLOT);
-  asm_op(a, OP_SLOAD);
-  asm_op(a, OP_SWAP1);
-  weight_term(a, OP_ADD);
+  asm_op(a, OP_SSTORE);
+  asm_jumpdest(a, done);
+  asm_op(a, OP_POP);
   asm_op(a, OP_POP);
 }
 
@@ -798,8 +839,8 @@ static void move_log(Asm *a, const EntryContext *c, unsigned from, unsigned to, 
 
 /* The move of transfer, with h at memory MEM_ID, to the calldata word TO
  * and q the word Q: q > PART[classA][h] reverts; settle h, then settle to
- * (SPEC 5: checkpoints both identities); the vote of q moves from h to to
- * (O2); MU[h] -= q, then MU[to] += q, then PART[classA][h] -= q, then
+ * (SPEC 5: checkpoints both identities); the snapshot copy of h, then of
+ * to (O2b); MU[h] -= q, then MU[to] += q, then PART[classA][h] -= q, then
  * PART[classA][to] += q (each credit read after its debit, so to = h keeps
  * the mass, O4); then move_log (O5a, O5d). p: push_partition (O4). */
 static void move_body(Asm *a, const EntryContext *c, unsigned to, unsigned q, unsigned p) {
@@ -814,10 +855,12 @@ static void move_body(Asm *a, const EntryContext *c, unsigned to, unsigned q, un
   settle(a);
   asm_argument(a, to);
   settle(a);
+  push_round_tag(a);
   asm_load(a, MEM_ID);
+  snapshot_copy(a);
   asm_argument(a, to);
-  asm_argument(a, q);
-  move_vote(a);
+  snapshot_copy(a);
+  asm_op(a, OP_POP);
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
@@ -1036,10 +1079,12 @@ static void recover_move(Asm *a, const EntryContext *c, unsigned w, unsigned p) 
   settle(a);
   asm_argument(a, w + 1);
   settle(a);
+  push_round_tag(a);
   asm_argument(a, w);
+  snapshot_copy(a);
   asm_argument(a, w + 1);
-  asm_argument(a, w + 2);
-  move_vote(a);
+  snapshot_copy(a);
+  asm_op(a, OP_POP);
   asm_argument(a, w);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
@@ -1081,29 +1126,58 @@ static void recover_partition(Asm *a, const EntryContext *c) {
   recover_move(a, c, 1, 0);
 }
 
-/* vote c (O2, MY CALLs 181 to 183): h = id(CALLER); c > k reverts; the
- * mass MU[h] moves in WEIGHT from the old ballot BALLOT[h] to c (code 0:
- * no term, so vote(0) withdraws the ballot); BALLOT[h] := c; returns c. */
+/* vote c (O2, MY CALLs 181 to 183; O2b, MY CALLs 239 and 240 (a)): h =
+ * id(CALLER); c > k reverts; t = ROUND + 1; the weight w of h is the low
+ * 128 bits of SNAP[h] when its tag is t (h moved in the round), else MU[h];
+ * the old code is the low 128 bits of BALLOT[h] when its tag is t, else 0
+ * (a ballot of an old round is no ballot); w moves in WEIGHT from the old
+ * code to c (code 0: no term, so vote(0) withdraws the ballot); BALLOT[h]
+ * := t 2^128 + c; returns c. */
 static void vote(Asm *a, const EntryContext *c) {
+  Label snap = asm_label(a);
+  Label have = asm_label(a);
   caller_identity(a);
   asm_store(a, MEM_ID);
   asm_push(a, c->decisions);
   asm_argument(a, 0);
   asm_op(a, OP_GT);
   asm_revert_if(a);
+  push_round_tag(a);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_SNAP);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_DUP1);
+  tag_of(a);
+  asm_op(a, OP_DUP3);
+  asm_op(a, OP_EQ);
+  asm_jump_if(a, snap);
+  asm_op(a, OP_POP);
+  asm_load(a, MEM_ID);
+  asm_slot(a, SLOT_MU);
+  asm_op(a, OP_SLOAD);
+  asm_jump(a, have);
+  asm_jumpdest(a, snap);
+  low_of(a);
+  asm_jumpdest(a, have);
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_BALLOT);
   asm_op(a, OP_SLOAD);
-  asm_load(a, MEM_ID);
-  asm_slot(a, SLOT_MU);
-  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_DUP1);
+  tag_of(a);
+  asm_op(a, OP_DUP4);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_SWAP1);
+  low_of(a);
+  asm_op(a, OP_MUL);
+  asm_op(a, OP_DUP2);
   weight_term(a, OP_SUB);
   asm_argument(a, 0);
-  asm_load(a, MEM_ID);
-  asm_slot(a, SLOT_MU);
-  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_SWAP1);
   weight_term(a, OP_ADD);
+  push_tag_unit(a);
+  asm_op(a, OP_MUL);
   asm_argument(a, 0);
+  asm_op(a, OP_ADD);
   asm_load(a, MEM_ID);
   asm_slot(a, SLOT_BALLOT);
   asm_op(a, OP_SSTORE);
@@ -1138,7 +1212,9 @@ static void quorum_guard(Asm *a, unsigned long long q) {
  * lower code (code j gets one when fewer than the seats left rank above it).
  * W < q reverts (quorum_guard; q = 1 without data). The seat tally sums to n, so its table index (table_index:
  * the sum of seats_j (n + 1)^(j - 1) over j < k) reads the verdict table
- * of KL1 (asm_verdict). CHARTER := the code; returns it. n w_j < 2^75 (the
+ * of KL1 (asm_verdict). CHARTER := the code; then the next round (O2b, MY
+ * CALL 240 (a)): WEIGHT[1 .. k] := 0 and ROUND := ROUND + 1, so each ballot
+ * of the round has an old tag; returns the code. n w_j < 2^75 (the
  * KL4 range), so plain MUL. The core amend (the packed table word) is not
  * in the interest lists. */
 static void amend(Asm *a, const EntryContext *c) {
@@ -1203,6 +1279,15 @@ static void amend(Asm *a, const EntryContext *c) {
   asm_verdict(a, n, k);
   asm_op(a, OP_DUP1);
   asm_push(a, SLOT_CHARTER);
+  asm_op(a, OP_SSTORE);
+  for (unsigned j = 1; j <= k; j++) {
+    asm_op(a, OP_PUSH0);
+    asm_push(a, j);
+    asm_slot(a, SLOT_WEIGHT);
+    asm_op(a, OP_SSTORE);
+  }
+  push_round_tag(a);
+  asm_push(a, SLOT_ROUND);
   asm_op(a, OP_SSTORE);
   asm_return_top(a);
 }
