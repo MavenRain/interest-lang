@@ -8,7 +8,9 @@
  * amend writes only the body of lang_entry_amend (lang_evm_amend). Codes go to
  * the back end unchecked (0 to 255), so the tests reach its EVM_TABLE
  * refusals. token writes the runtime code of a stub ERC-20 token for the
- * carrier cases (O5b, MY CALL 153). Exit 0 ok, 1 refused by the back end,
+ * carrier cases (O5b, MY CALL 153). receiver VARIANT writes the runtime code
+ * of a stub ERC-721 receiver for the safeTransferFrom cases (O5d, MY CALL
+ * 219). Exit 0 ok, 1 refused by the back end,
  * 2 usage. */
 #include "../src/asm.h"
 #include "../src/keccak.h"
@@ -21,7 +23,8 @@ typedef enum { VERB_CREATION, VERB_RUNTIME, VERB_AMEND, VERB_NONE } Verb;
 
 static int usage(void) {
   fputs("usage: evmtool [-k K] creation|runtime|amend N debreu CODE... | evmtool [-k K] creation|runtime N impossibility [CODE...]"
-        " | evmtool keccak TEXT | evmtool token standard|noreturn|false|revert|fee|hook\n", stderr);
+        " | evmtool keccak TEXT | evmtool token standard|noreturn|false|revert|fee|hook"
+        " | evmtool receiver accept|wrong|short|revert|reenter\n", stderr);
   return 2;
 }
 
@@ -240,6 +243,96 @@ static int token(const char *text) {
   return 0;
 }
 
+typedef enum { RECEIVER_ACCEPT, RECEIVER_WRONG, RECEIVER_SHORT, RECEIVER_REVERT, RECEIVER_REENTER, RECEIVER_NONE } Receiver;
+
+static Receiver receiver_of(const char *text) {
+  static const char *const names[RECEIVER_NONE] = { "accept", "wrong", "short", "revert", "reenter" };
+  size_t i = 0;
+  while (i < RECEIVER_NONE && strcmp(text, names[i]) != 0)
+    i++;
+  return (Receiver)i;
+}
+
+/* The runtime code of a stub ERC-721 receiver; each call is
+ * onERC721Received(operator, from, id, data). accept stores operator, from,
+ * id and the data offset at slots 0 to 3, the data length at slot 4 and the
+ * first data word at slot 5, and returns the word of the selector
+ * 0x150b7a02; wrong returns another word; short stops with no data; revert
+ * reverts; reenter calls transferFrom(this, from, id) back on CALLER, stores
+ * 1 + its status at slot 0 and returns the selector word. */
+static void receiver_code(Asm *a, Receiver variant) {
+  static const unsigned char transfer_from[32] = { 0x23, 0xb8, 0x72, 0xdd };
+  unsigned char word[32] = { 0x15, 0x0b, 0x7a, 0x02 };
+  if (variant == RECEIVER_SHORT) {
+    asm_put(a, 0x00);  /* STOP */
+    return;
+  }
+  if (variant == RECEIVER_REVERT) {
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_REVERT);
+    return;
+  }
+  if (variant == RECEIVER_ACCEPT) {
+    for (unsigned j = 0; j < 4; j++) {
+      asm_argument(a, j);
+      asm_push(a, j);
+      asm_op(a, OP_SSTORE);
+    }
+    asm_argument(a, 3);
+    asm_push(a, 4);
+    asm_op(a, OP_ADD);
+    asm_op(a, OP_DUP1);
+    asm_op(a, OP_CALLDATALOAD);
+    asm_push(a, 4);
+    asm_op(a, OP_SSTORE);
+    asm_push(a, 32);
+    asm_op(a, OP_ADD);
+    asm_op(a, OP_CALLDATALOAD);
+    asm_push(a, 5);
+    asm_op(a, OP_SSTORE);
+  }
+  if (variant == RECEIVER_REENTER) {
+    asm_push_word(a, transfer_from);
+    asm_store(a, 0x80);
+    asm_op(a, OP_ADDRESS);
+    asm_store(a, 0x84);
+    asm_argument(a, 1);
+    asm_store(a, 0xa4);
+    asm_argument(a, 2);
+    asm_store(a, 0xc4);
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_PUSH0);
+    asm_push(a, 0x64);
+    asm_push(a, 0x80);
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_CALLER);
+    asm_op(a, OP_GAS);
+    asm_op(a, OP_CALL);
+    asm_push(a, 1);
+    asm_op(a, OP_ADD);
+    asm_op(a, OP_PUSH0);
+    asm_op(a, OP_SSTORE);
+  }
+  word[3] = variant == RECEIVER_WRONG ? 0x03 : 0x02;
+  asm_push_word(a, word);
+  asm_return_top(a);
+}
+
+static int receiver(const char *text) {
+  static Asm a;
+  Receiver variant = receiver_of(text);
+  if (variant == RECEIVER_NONE)
+    return usage();
+  receiver_code(&a, variant);
+  if (!resolved(&a))
+    return 1;
+  for (size_t i = 0; i < a.size; i++)
+    printf("%02x", a.code[i]);
+  putchar('\n');
+  return 0;
+}
+
 static Verb verb_of(const char *text) {
   return strcmp(text, "creation") == 0 ? VERB_CREATION
          : strcmp(text, "runtime") == 0 ? VERB_RUNTIME
@@ -271,6 +364,8 @@ int main(int argc, char **argv) {
     return keccak(argv[2]);
   if (argc == 3 && strcmp(argv[1], "token") == 0)
     return token(argv[2]);
+  if (argc == 3 && strcmp(argv[1], "receiver") == 0)
+    return receiver(argv[2]);
   int shift = argc >= 3 && strcmp(argv[1], "-k") == 0 ? 2 : 0;
   long decisions = shift == 0 ? 3 : number(argv[2]);  /* the sample domain: k = 3 */
   int argn = argc - shift;

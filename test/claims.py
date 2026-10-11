@@ -72,6 +72,7 @@ METADATA = ('name()', 'symbol()', 'decimals()')
 # symbol (no decimals). balanceOf and totalSupply are Debreu entries.
 NFT_FACADE = ('ownerOf(uint256)', 'approve(address,uint256)', 'getApproved(uint256)', 'setApprovalForAll(address,bool)',
               'isApprovedForAll(address,address)', 'transferFrom(address,address,uint256)', 'supportsInterface(bytes4)',
+              'safeTransferFrom(address,address,uint256)', 'safeTransferFrom(address,address,uint256,bytes)',
               'name()', 'symbol()')
 
 

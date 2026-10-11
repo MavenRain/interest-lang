@@ -1403,7 +1403,7 @@ static void is_approved_for_all(Asm *a, const EntryContext *c) {
  * revert; then R (classA) from the profile of from to the profile of to,
  * and move_body of the one unit from from to to (OWNER := to,
  * APPROVED := 0, the LOG4 Transfer). */
-static void transfer_from_nft(Asm *a, const EntryContext *c) {
+static void transfer_from_body(Asm *a, const EntryContext *c) {
   Label pass = asm_label(a);
   token_guard(a, 2);
   asm_address_guard(a, 0);
@@ -1427,7 +1427,134 @@ static void transfer_from_nft(Asm *a, const EntryContext *c) {
   asm_store(a, MEM_ID);
   restriction_guard(a, c, 1, 2, PART_WORD_NONE);
   move_body(a, c, 1, 2, PART_WORD_NONE);
+}
+
+/* transfer_from_body, then return_void. */
+static void transfer_from_nft(Asm *a, const EntryContext *c) {
+  transfer_from_body(a, c);
   return_void(a);
+}
+
+/* (nothing) -> the length word of the bytes of safeTransferFrom (the
+ * offset in the calldata word 3). */
+static void nft_data_length(Asm *a) {
+  asm_argument(a, 3);
+  asm_push(a, 4);
+  asm_op(a, OP_ADD);
+  asm_op(a, OP_CALLDATALOAD);
+}
+
+/* The bytes of safeTransferFrom (MY CALL 219 (a)): an offset or a length
+ * past CALLDATASIZE reverts. The offset is at most CALLDATASIZE before the
+ * length is read, and the length is at most CALLDATASIZE before the sum, so
+ * the sum does not overflow. */
+static void nft_data_guard(Asm *a) {
+  asm_op(a, OP_CALLDATASIZE);
+  asm_argument(a, 3);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  asm_op(a, OP_CALLDATASIZE);
+  nft_data_length(a);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  asm_op(a, OP_CALLDATASIZE);
+  nft_data_length(a);
+  asm_argument(a, 3);
+  asm_op(a, OP_ADD);
+  asm_push(a, 4 + WORD);
+  asm_op(a, OP_ADD);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+}
+
+/* The end of safeTransferFrom (MY CALL 219 (a)), after transfer_from_body:
+ * when EXTCODESIZE(to) > 0, a CALL of to with all the gas, no value and
+ * onERC721Received(CALLER, from, TOKEN_ID, data) at MEM_CALL. DATA: the
+ * bytes of nft_data_guard, copied by CALLDATACOPY and padded to a word;
+ * else empty bytes. The call fails, returns less than 32 bytes, or returns
+ * a first word with 4 high bytes other than 0x150b7a02: revert. Then
+ * RETURN with no data. The order is write, log, call. */
+static void nft_received(Asm *a, int data) {
+  static const unsigned char received[WORD] = { 0x15, 0x0b, 0x7a, 0x02 };
+  unsigned char padded[WORD];
+  Label done = asm_label(a);
+  memset(padded, 0xff, sizeof padded);
+  padded[WORD - 1] = 0xe0;
+  asm_argument(a, 1);
+  asm_op(a, OP_EXTCODESIZE);
+  asm_op(a, OP_ISZERO);
+  asm_jump_if(a, done);
+  asm_push_word(a, received);
+  asm_store(a, MEM_CALL);
+  asm_op(a, OP_CALLER);
+  asm_store(a, MEM_CALL + 4);
+  asm_argument(a, 0);
+  asm_store(a, MEM_CALL + 4 + WORD);
+  asm_push(a, TOKEN_ID);
+  asm_store(a, MEM_CALL + 4 + 2 * WORD);
+  asm_push(a, 4 * WORD);
+  asm_store(a, MEM_CALL + 4 + 3 * WORD);
+  if (data) {
+    nft_data_length(a);
+    asm_op(a, OP_DUP1);
+    asm_argument(a, 3);
+    asm_push(a, 4 + WORD);
+    asm_op(a, OP_ADD);
+    asm_push(a, MEM_CALL + 4 + 5 * WORD);
+    asm_op(a, OP_CALLDATACOPY);
+  } else {
+    asm_op(a, OP_PUSH0);
+  }
+  asm_op(a, OP_DUP1);
+  asm_store(a, MEM_CALL + 4 + 4 * WORD);
+  asm_push(a, WORD - 1);
+  asm_op(a, OP_ADD);
+  asm_push_word(a, padded);
+  asm_op(a, OP_AND);
+  asm_push(a, 4 + 5 * WORD);
+  asm_op(a, OP_ADD);
+  asm_push(a, WORD);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_SWAP1);
+  asm_push(a, MEM_CALL);
+  asm_op(a, OP_PUSH0);
+  asm_argument(a, 1);
+  asm_op(a, OP_GAS);
+  asm_op(a, OP_CALL);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, WORD - 1);
+  asm_op(a, OP_RETURNDATASIZE);
+  asm_op(a, OP_GT);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_MLOAD);
+  asm_push(a, 224);
+  asm_op(a, OP_SHR);
+  asm_push(a, 0x150b7a02);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_jumpdest(a, done);
+  return_void(a);
+}
+
+/* safeTransferFrom(address from, address to, uint256 id) (MY CALL 219 (a)):
+ * transfer_from_body, then nft_received with empty bytes. */
+static void safe_transfer_from(Asm *a, const EntryContext *c) {
+  transfer_from_body(a, c);
+  nft_received(a, 0);
+}
+
+/* safeTransferFrom(address from, address to, uint256 id, bytes data) (MY
+ * CALL 219 (a)): nft_data_guard, transfer_from_body, then nft_received with
+ * the bytes. */
+static void safe_transfer_from_data(Asm *a, const EntryContext *c) {
+  nft_data_guard(a);
+  transfer_from_body(a, c);
+  nft_received(a, 1);
 }
 
 /* supportsInterface(bytes4 id) (ERC-165, MY CALL 214 (a)): a word with a
@@ -1619,8 +1746,7 @@ static const Entry debreu_token[] = {
 
 /* The ERC-721 facade (O5d, MY CALL 214 (a)): the 14 native rows, vote, the
  * 4 ERC-1400 rows and the ERC-721 rows. Wei mode only: lang_data refuses
- * the token asset and the impossibility regime at erc721. The 2
- * safeTransferFrom rows are not in this table yet. */
+ * the token asset and the impossibility regime at erc721. */
 static const Entry debreu_erc721[] = {
   {"deposit", 1, 0, ENTRY_PAYABLE, deposit, NULL},
   {"distribute", 1, 0, ENTRY_NONPAYABLE, distribute, NULL},
@@ -1648,6 +1774,8 @@ static const Entry debreu_erc721[] = {
   {"setApprovalForAll", 2, 0, ENTRY_NONPAYABLE, set_approval_for_all, "address,bool"},
   {"isApprovedForAll", 2, 0, ENTRY_NONPAYABLE, is_approved_for_all, "address,address"},
   {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from_nft, "address,address,uint256"},
+  {"safeTransferFrom", 3, 0, ENTRY_NONPAYABLE, safe_transfer_from, "address,address,uint256"},
+  {"safeTransferFrom", 4, 0, ENTRY_NONPAYABLE, safe_transfer_from_data, "address,address,uint256,bytes"},
   {"supportsInterface", 1, 0, ENTRY_NONPAYABLE, supports_interface, "bytes4"},
   {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
   {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},

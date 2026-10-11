@@ -742,12 +742,30 @@ def allowance(owner, spender):
     return int(checked(['cast', 'index', 'address', f'0x{spender:040x}', f'0x{slot(1, owner):064x}']).strip(), 16)
 
 
+@functools.cache
+def receiver_code(variant):
+    return bytecode('receiver', variant)
+
+
+def safe(source, target, payload=None, *, offset=0x80, length=None):
+    """The calldata of safeTransferFrom(source, target, TOKEN_ID): the 3-word form at PAYLOAD None,
+    else the bytes form with PAYLOAD at OFFSET (LENGTH: the length word, None: len(PAYLOAD))."""
+    if payload is None:
+        return (selector('safeTransferFrom', 3, 'safeTransferFrom(address,address,uint256)')
+                + f'{source:064x}{target:064x}{TOKEN_ID:064x}')
+    size = len(payload) if length is None else length
+    return (selector('safeTransferFrom', 4, 'safeTransferFrom(address,address,uint256,bytes)')
+            + ''.join(f'{value:064x}' for value in (source, target, TOKEN_ID, offset, size))
+            + payload.hex().ljust(-(-len(payload) // 32) * 64, '0'))
+
+
 def token_case(name, runtime, calldata, before, after, result, *, variant, held, moved=None, value=0,
-               sender=SENDER, logs=()):
-    """expect with the stub token `evmtool token VARIANT` at TOKEN: HELD is the token storage
-    before the call, MOVED the token storage after it (None: HELD)."""
+               sender=SENDER, logs=(), receiver=False):
+    """expect with the stub token `evmtool token VARIANT` (RECEIVER: the stub receiver `evmtool
+    receiver VARIANT`) at TOKEN: HELD is its storage before the call, MOVED its storage after it
+    (None: HELD)."""
     actual = run(name, runtime, calldata, before=before, value=value, sender=sender,
-                 token=(TOKEN, token_code(variant), held))
+                 token=(TOKEN, receiver_code(variant) if receiver else token_code(variant), held))
     wanted = dict(status='revert' if result is None else 'success',
                   output='' if result is None else result if isinstance(result, str) else f'{result:064x}',
                   storage={k: v for k, v in after.items() if v}, logs=list(logs),
@@ -884,8 +902,31 @@ def erc721_cases():
             ('supports-low', data('supportsInterface', erc721 | 1), base, None, None, 0, SENDER),
             ('transfer-one', data('transfer', 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)]),
             ('transfer-zero', data('transfer', 2, 0), approved, None, 1, 0, one),
-            ('recover-one', data('recover', 1, 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)])]
-    return table_cases('example-erc721', runtime, rows), 1
+            ('recover-one', data('recover', 1, 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)]),
+            ('safe-transfer', safe(1, 2), approved, moved, '', 0, one, [nft_log(1, 2)]),
+            ('safe-transfer-data', safe(1, 2, b'abc'), approved, moved, '', 0, one, [nft_log(1, 2)]),
+            ('safe-transfer-stranger', safe(1, 2), base, None, None, 0, three),
+            ('safe-transfer-data-stranger', safe(1, 2, b'abc'), base, None, None, 0, three),
+            ('safe-transfer-data-offset', safe(1, 2, b'abc', offset=2**255), approved, None, None, 0, one),
+            ('safe-transfer-data-length', safe(1, 2, b'abc', length=2**64), approved, None, None, 0, one)]
+    count = table_cases('example-erc721', runtime, rows)
+    # The stub receiver (`evmtool receiver VARIANT`, MY CALL 219 (a)) at TOKEN: its address is the
+    # identity word r (no attest: R at open admits each profile).
+    r, operator, abc = int(TOKEN, 16), int(one, 16), int(b'abc'.hex().ljust(64, '0'), 16)
+    taken = {**base, slot(MU, 1): 0, slot(MU, r): 1, parted(1, 1): 0, parted(1, r): 1, OWNER: r}
+    stored = {0: operator, 1: 1, 2: TOKEN_ID, 3: 0x80}
+    safe_rows = [('accept', 'accept', safe(1, r), taken, stored),
+                 ('data-accept', 'accept', safe(1, r, b'abc'), taken, {**stored, 4: 3, 5: abc}),
+                 ('wrong', 'wrong', safe(1, r), None, None),
+                 ('short', 'short', safe(1, r), None, None),
+                 ('revert', 'revert', safe(1, r), None, None),
+                 ('data-revert', 'revert', safe(1, r, b'abc'), None, None),
+                 ('reenter', 'reenter', safe(1, r), taken, {0: 1})]
+    for label, variant, calldata, after, moved_receiver in safe_rows:
+        token_case(f'example-erc721-safe-{label}', runtime, calldata, base, base if after is None else after,
+                   None if after is None else '', variant=variant, held={}, moved=moved_receiver, sender=one,
+                   logs=[] if after is None else [nft_log(1, r)], receiver=True)
+    return count + len(safe_rows), 1
 
 
 def gas_check(write):
