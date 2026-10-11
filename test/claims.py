@@ -141,7 +141,8 @@ class State:
     In token mode CARRIER is the carrier address and TOKEN the carrier storage words of
     the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None.
     ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c). BALLOT maps an
-    identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2)."""
+    identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2).
+    PART maps a (partition, identity) pair to its units (O4); the moves use CLASS_A."""
     mu: dict
     registry: dict
     profile: dict
@@ -157,15 +158,23 @@ class State:
     allowance: dict = dataclasses.field(default_factory=dict)
     ballot: dict = dataclasses.field(default_factory=dict)
     weight: dict = dataclasses.field(default_factory=dict)
+    part: dict = dataclasses.field(default_factory=dict)
+
+
+# The partition of the moves and of recover (O4 B2: PART_DEFAULT of domain/entries.c), and
+# the partition codes (LANG_PARTITIONS).
+CLASS_A = 1
+PARTITIONS = (1, 2)
 
 
 def genesis(program):
-    mu, registry, profile = {}, {}, {}
-    for w, h, p, u, _ in program.genesis:
+    mu, registry, profile, part = {}, {}, {}, {}
+    for w, h, p, u, code in program.genesis:
         registry[w] = h + 1
         mu[h] = mu.get(h, 0) + u
         profile[h] = p
-    s = State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0)
+        part[code, h] = part.get((code, h), 0) + u
+    s = State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0, part=part)
     held = {key: value for w, balance, allowed in FUNDS
             for key, value in ((slot(0, w), balance), (st.allowance(w, HERE), allowed))}
     return dataclasses.replace(s, carrier=int(st.TOKEN, 16), token=held) if program.token else s
@@ -182,7 +191,8 @@ def storage(s):
              **{slot(NUM, h): n for h, n in s.num.items()},
              **{allowance_word(o, p): v for (o, p), v in s.allowance.items()},
              **{slot(BALLOT, h): c for h, c in s.ballot.items()},
-             **{slot(WEIGHT, c): w for c, w in s.weight.items()}}
+             **{slot(WEIGHT, c): w for c, w in s.weight.items()},
+             **{st.parted(p, h): u for (p, h), u in s.part.items()}}
     return {key: value for key, value in words.items() if value}
 
 
@@ -273,9 +283,10 @@ def transfer(program, s, sender, value, to, q):
 
 
 def send(program, s, h, to, q):
-    """The move of transfer by identity h: iff to > 0, R(h, to, q) and q <= mass h."""
+    """The move of transfer by identity h: iff to > 0, R(h, to, q) and q <= the classA mass
+    of h (O4 B2; PART[classA][h] <= mass h)."""
     code = program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
-    if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.mu.get(h, 0):
+    if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.part.get((CLASS_A, h), 0):
         return None
     return move(s, h, to, q)
 
@@ -313,14 +324,17 @@ def allowance_view(program, s, sender, value, o, p):
 
 def move(s, h, to, q):
     """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
-    vote of q moves from the ballot of h to the ballot of to (O2)."""
+    vote of q moves from the ballot of h to the ballot of to (O2); then the same debit and
+    credit of PART[classA] (O4 B2)."""
     first = settle(s, h)
     second = None if first is None else settle(first, to)
     if second is None:
         return None
     debited = {**second.mu, h: second.mu.get(h, 0) - q}
     weight = shift(second.weight, second.ballot.get(h, 0), second.ballot.get(to, 0), q)
-    return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight), 1
+    taken = {**second.part, (CLASS_A, h): second.part.get((CLASS_A, h), 0) - q}
+    return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight,
+                               part={**taken, (CLASS_A, to): taken.get((CLASS_A, to), 0) + q}), 1
 
 
 def issuer(program, s, sender):
@@ -338,9 +352,9 @@ def attest(program, s, sender, value, w, h, p):
 
 def recover(program, s, sender, value, h, to, q):
     """ERC-1644 forced transfer by a trusted issuer of the active charter (O3): the move
-    of transfer iff h > 0, to > 0 and q <= mass h; R does not gate it."""
+    of transfer iff h > 0, to > 0 and q <= the classA mass of h (O4 B2); R does not gate it."""
     if (not issuer(program, s, sender) or 0 in (h, to) or h + 1 >= WORD or to + 1 >= WORD
-            or q > s.mu.get(h, 0)):
+            or q > s.part.get((CLASS_A, h), 0)):
         return None
     return move(s, h, to, q)
 
@@ -624,14 +638,20 @@ def laws_hold(program, words, balance, deposits, paid, recycled):
     S * recycled sum to S * INDEX (each distribute adds S * d; RECYCLED is the wei that
     withdraw moved from DUST to RESERVE[0]), the deposits and RECYCLED are the reserves and
     INDEX, and the wei balance is the deposits less the paid wei. Solvency, from the geth
-    state only: S * balance is the claims, DUST and S * the reserves (O11)."""
+    state only: S * balance is the claims, DUST and S * the reserves (O11). Partitions (O4 B2):
+    the PART words of each identity sum to its mass (partSum), and the PART words of each
+    partition sum to the units of its genesis rows (partSupply: the moves keep each partition)."""
     supply, index, dust = program.supply, words.get(INDEX, 0), words.get(DUST, 0)
     mass = sum(words.get(slot(MU, h), 0) for h in IDENTITIES)
     reserves = words.get(slot(RESERVE, 0), 0) + words.get(slot(RESERVE, 1), 0)
     claims = sum(geth_claims(words).values())
+    held = lambda p, h: words.get(st.parted(p, h), 0)
+    part_sum = all(sum(held(p, h) for p in PARTITIONS) == words.get(slot(MU, h), 0) for h in IDENTITIES)
+    part_supply = all(sum(held(p, h) for h in IDENTITIES) == sum(row[3] for row in program.genesis if row[4] == p)
+                      for p in PARTITIONS)
     return (mass == supply and claims + dust + supply * (paid + recycled) == supply * index
             and deposits + recycled == reserves + index and balance == deposits - paid
-            and supply * balance == claims + dust + supply * reserves)
+            and supply * balance == claims + dust + supply * reserves and part_sum and part_supply)
 
 
 def play(program, s, calls):
@@ -705,20 +725,24 @@ def amend_law(program, runtime):
 
 
 def recover_law(program, runtime):
-    """At a rich state, the issuer moves the whole mass of each identity to each identity:
-    on geth the masses sum to S, mu moves by q, and every claim, both reserves, INDEX and
-    the wei do not change. A recover by a non-issuer reverts and moves nothing."""
+    """At a rich state, the issuer moves the whole classA mass of each identity to each
+    identity (O4 B2): on geth the masses sum to S, mu and PART[classA] move by q, PART[classB]
+    does not move, and every claim, both reserves, INDEX and the wei do not change. A recover
+    by a non-issuer reverts and moves nothing."""
     s, count = rich_debreu(program), 0
     treasury = lambda words: (words.get(slot(RESERVE, 0), 0), words.get(slot(RESERVE, 1), 0), words.get(INDEX, 0))
+    parts = lambda words: {(p, k): words.get(st.parted(p, k), 0) for p in PARTITIONS for k in IDENTITIES}
     for h, to in itertools.product((1, 2, 3), repeat=2):
-        q = s.mu.get(h, 0)
+        q = s.part.get((CLASS_A, h), 0)
         words, balance = check_step(f'law-recover-{h}-{to}', program, runtime, s, at(s),
                                     ('recover', (h, to, q), wallet(4096), 0))[1]
         moved = {k: words.get(slot(MU, k), 0) - s.mu.get(k, 0) for k in IDENTITIES}
         wanted = {k: (q if k == to else 0) - (q if k == h else 0) for k in IDENTITIES}
+        shifted = {key: u - parts(storage(s))[key] for key, u in parts(words).items()}
         require(sum(words.get(slot(MU, k), 0) for k in IDENTITIES) == program.supply and moved == wanted
+                and shifted == {(p, k): wanted[k] if p == CLASS_A else 0 for p, k in shifted}
                 and geth_claims(words) == geth_claims(storage(s)) and treasury(words) == treasury(storage(s))
-                and balance == s.balance, f'law-recover {h} {to} {q}: recover moved a claim or the treasury')
+                and balance == s.balance, f'law-recover {h} {to} {q}: recover moved a claim, the treasury or classB')
         count += 1
     chain = check_step('law-recover-non-issuer', program, runtime, s, at(s), ('recover', (1, 2, 1), wallet(4097), 0))[1]
     require(chain == at(s), 'law-recover-non-issuer: the state moved')
@@ -742,14 +766,19 @@ def impossibility_reverts(program, runtime):
 
 
 def r_rejections(program, runtime):
-    """R rejections revert and leave the state unchanged: at genesis both identities hold
-    5 units; open admits q <= 5 (mass), restricted q <= 4, frozen nothing (not even 0)."""
-    limit, count = {1: 5, 2: 4, 3: -1}, 0
+    """R rejections revert and leave the state unchanged: identity 1 holds 5 classA units at
+    genesis, and identity 2 holds 6 after an issuer recover of 3 classA units from identity 1
+    (O4 B2: the moves spend classA only), so R alone rejects q = 5, 6 at restricted. Open
+    admits q <= the classA mass, restricted q <= 4 and the classA mass, frozen nothing (not
+    even 0)."""
+    limit, count, start = {1: WORD, 2: 4, 3: -1}, 0, genesis(program)
+    recovered = check_step('law-r-recover', program, runtime, start, at(start), ('recover', (1, 2, 3), wallet(4096), 0))[0]
+    starts = {wallet(4096): start, wallet(4097): recovered}
     for charter, (sender, to), q in itertools.product((1, 2, 3), ((wallet(4096), 2), (wallet(4097), 1)),
                                                       (0, 1, 4, 5, 6)):
-        s, call = dataclasses.replace(genesis(program), charter=charter), ('transfer', (to, q), sender, 0)
+        s, call = dataclasses.replace(starts[sender], charter=charter), ('transfer', (to, q), sender, 0)
         chain = check_step(f'law-r-{charter}-{to}-{q}', program, runtime, s, at(s), call)[1]
-        admitted = q <= limit[charter]
+        admitted = q <= min(limit[charter], s.part.get((CLASS_A, identity(s, sender)), 0))
         require((apply(program, s, call) is not None) == admitted and (admitted or chain == at(s)),
                 f'law-r {charter} {call}: admitted {not admitted}')
         count += 1

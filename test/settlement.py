@@ -24,7 +24,7 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                nonce='0x0000000000000000', timestamp='0x0', number='0x0',
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
-MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE, BALLOT, WEIGHT = range(13)
+MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE, BALLOT, WEIGHT, PART = range(14)
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
@@ -116,10 +116,21 @@ def approval_log(owner, spender, value, address=RECEIVER):
 
 
 @functools.cache
+def nested(base, outer, inner):
+    """The slot of BASE[OUTER][INNER] of the contract: keccak256(inner . keccak256(outer . BASE)),
+    the Solidity nested mapping."""
+    return int(checked(['cast', 'index', 'uint256', str(inner), f'0x{slot(base, outer):064x}']).strip(), 16)
+
+
 def allowed(owner, spender):
-    """The slot of ALLOWANCE[OWNER][SPENDER] of the contract (O5c, MY CALL 168):
-    keccak256(spender . keccak256(owner . 10)), the Solidity nested mapping."""
-    return int(checked(['cast', 'index', 'uint256', str(spender), f'0x{slot(ALLOWANCE, owner):064x}']).strip(), 16)
+    """The slot of ALLOWANCE[OWNER][SPENDER] of the contract (O5c, MY CALL 168)."""
+    return nested(ALLOWANCE, owner, spender)
+
+
+def parted(p, h):
+    """The slot of PART[P][H] of the contract, the units of identity H in partition P (O4, MY
+    CALL 202 (a)): keccak256(h . keccak256(p . 13))."""
+    return nested(PART, p, h)
 
 
 def abi_text(value):
@@ -282,13 +293,14 @@ def deploy(name, creation, runtime, storage, logs=(), *, suffix='', token=None):
 
 
 def genesis_storage(start, rows):
-    """The storage that the genesis writes of domain/entries.c leave: rows w:h:p:u:part (no
-    write of the partition at O4 B1)."""
+    """The storage that the genesis writes of domain/entries.c leave: rows w:h:p:u:part
+    (PART[part][h] is the sum of the units of the rows of (h, part), O4 B2)."""
     store = {CHARTER: start}
-    for w, h, p, u, _ in rows:
+    for w, h, p, u, part in rows:
         store[slot(REGISTRY, w)] = h + 1
         store[slot(MU, h)] = store.get(slot(MU, h), 0) + u
         store[slot(PROFILE, h)] = p
+        store[parted(part, h)] = store.get(parted(part, h), 0) + u
     return {key: value for key, value in store.items() if value}
 
 
@@ -392,11 +404,15 @@ def vector_index(vector, k):
 def debreu_example_cases():
     """B2 entries at the genesis of examples/arrow-debreu.lang: start restricted (upTo 4
     everywhere), open any, frozen deny; identity 1 (wallet 4096, 5 units, profile 0) is
-    the issuer at open and restricted; identity 2 (wallets 4097, 4098, 5 units, profile 3)."""
+    the issuer at open and restricted; identity 2 (wallets 4097, 4098, 5 units, profile 3).
+    The moves debit and credit classA (O4 B2): PART[classA] is 5 at identity 1 and 3 at
+    identity 2 (wallet 4097); wallet 4098 adds 2 units in classB, so q > 3 from identity 2
+    reverts."""
     runtime = program_code('example-debreu', DEBREU, [(1, 5), (2, 5)])
     base = data_storage(DEBREU)
     one, two, three = wallet(4096), wallet(4097), wallet(4098)
     mu1, mu2 = slot(MU, 1), slot(MU, 2)
+    p11, p12, p13 = parted(1, 1), parted(1, 2), parted(1, 3)
     opened, frozen = {**base, CHARTER: 1}, {**base, CHARTER: 3}
     attested = {slot(REGISTRY, 4099): 4, slot(PROFILE, 3): 2}
     rows = [('deposit-rent', data('deposit', 0), base, {**base, slot(RESERVE, 0): 7}, 7, 7, one),
@@ -404,13 +420,17 @@ def debreu_example_cases():
              {**base, slot(RESERVE, 1): 7}, 7, 4, SENDER),
             ('deposit-kind', data('deposit', 2), base, None, None, 1, one),
             ('deposit-overflow', data('deposit', 0), {**base, slot(RESERVE, 0): 2**256 - 3}, None, None, 5, one),
-            ('transfer-admit', data('transfer', 2, 4), base, {**base, mu1: 1, mu2: 9}, 1, 0, one, [transfer_log(1, 2, 4)]),
+            ('transfer-admit', data('transfer', 2, 4), base, {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0, one,
+             [transfer_log(1, 2, 4)]),
             ('transfer-limit', data('transfer', 2, 5), base, None, None, 0, one),
             ('transfer-frozen', data('transfer', 2, 1), frozen, None, None, 0, one),
-            ('transfer-open-all', data('transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
+            ('transfer-open-all', data('transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1, 0,
+             one, [transfer_log(1, 2, 5)]),
             ('transfer-over-mass', data('transfer', 2, 6), opened, None, None, 0, one),
             ('transfer-self', data('transfer', 1, 3), base, None, 1, 0, one, [transfer_log(1, 1, 3)]),
-            ('transfer-second-wallet', data('transfer', 1, 4), base, {**base, mu1: 9, mu2: 1}, 1, 0, three, [transfer_log(2, 1, 4)]),
+            ('transfer-second-wallet', data('transfer', 1, 3), base, {**base, mu1: 8, mu2: 2, p11: 8, p12: 0}, 1, 0,
+             three, [transfer_log(2, 1, 3)]),
+            ('transfer-over-class', data('transfer', 1, 4), base, None, None, 0, three),
             ('transfer-no-identity', data('transfer', 2, 1), base, None, None, 0, SENDER),
             ('transfer-to-zero', data('transfer', 0, 1), base, None, None, 0, one),
             ('transfer-value', data('transfer', 2, 1), base, None, None, 1, one),
@@ -424,9 +444,13 @@ def debreu_example_cases():
             ('attest-profile', data('attest', 4099, 3, 4), base, None, None, 0, one),
             ('attest-identity-wrap', data('attest', 4099, 2**256 - 1, 0), base, None, None, 0, one),
             ('attest-identity-zero', data('attest', 4099, 0, 2), base, None, None, 0, one),
-            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2}, 1, 0, one, [transfer_log(2, 3, 2)]),
-            ('recover-open', data('recover', 2, 1, 5), opened, {**opened, mu1: 10, mu2: 0}, 1, 0, one, [transfer_log(2, 1, 5)]),
-            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
+            ('recover-issuer', data('recover', 2, 3, 2), base, {**base, mu2: 3, slot(MU, 3): 2, p12: 1, p13: 2}, 1, 0,
+             one, [transfer_log(2, 3, 2)]),
+            ('recover-open', data('recover', 2, 1, 3), opened, {**opened, mu1: 8, mu2: 2, p11: 8, p12: 0}, 1, 0, one,
+             [transfer_log(2, 1, 3)]),
+            ('recover-over-class', data('recover', 2, 1, 5), opened, None, None, 0, one),
+            ('recover-r-free', data('recover', 1, 2, 5), base, {**base, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1, 0, one,
+             [transfer_log(1, 2, 5)]),
             ('recover-self', data('recover', 2, 2, 3), base, None, 1, 0, one, [transfer_log(2, 2, 3)]),
             ('recover-over-mass', data('recover', 2, 3, 6), base, None, None, 0, one),
             ('recover-non-issuer', data('recover', 1, 2, 1), base, None, None, 0, two),
@@ -458,7 +482,8 @@ def debreu_example_cases():
     # allowance of identity 1; identity 3 has no wallet and profile 0.
     a12, mu3 = allowed(1, 2), slot(MU, 3)
     given = {**opened, a12: 5}
-    rows += [('erc20-transfer', data('erc20Transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10}, 1, 0, one,
+    rows += [('erc20-transfer', data('erc20Transfer', 2, 5), opened, {**opened, mu1: 0, mu2: 10, p11: 0, p12: 8}, 1,
+              0, one,
               [transfer_log(1, 2, 5)]),
              ('erc20-transfer-wide', data('erc20Transfer', 2**160 + 2, 1), opened, None, None, 0, one),
              ('approve', data('approve', 2, 5), base, {**base, a12: 5}, 1, 0, one, [approval_log(1, 2, 5)]),
@@ -470,10 +495,10 @@ def debreu_example_cases():
              ('name', data('name'), base, None, abi_text('Arrow-Debreu'), 0, SENDER),
              ('symbol', data('symbol'), base, None, abi_text('AD'), 0, SENDER),
              ('decimals', data('decimals'), base, None, 0, 0, SENDER),
-             ('transferfrom', data('transferFrom', 1, 3, 3), given, {**given, a12: 2, mu1: 2, mu3: 3}, 1, 0,
-              two, [transfer_log(1, 3, 3)]),
-             ('transferfrom-all', data('transferFrom', 1, 3, 5), given, {**given, a12: 0, mu1: 0, mu3: 5}, 1, 0,
-              two, [transfer_log(1, 3, 5)]),
+             ('transferfrom', data('transferFrom', 1, 3, 3), given,
+              {**given, a12: 2, mu1: 2, mu3: 3, p11: 2, p13: 3}, 1, 0, two, [transfer_log(1, 3, 3)]),
+             ('transferfrom-all', data('transferFrom', 1, 3, 5), given,
+              {**given, a12: 0, mu1: 0, mu3: 5, p11: 0, p13: 5}, 1, 0, two, [transfer_log(1, 3, 5)]),
              ('transferfrom-over-allowance', data('transferFrom', 1, 3, 4), {**opened, a12: 3}, None, None, 0, two),
              ('transferfrom-over-mass', data('transferFrom', 1, 3, 6), {**opened, a12: 9}, None, None, 0, two),
              ('transferfrom-restricted', data('transferFrom', 1, 3, 1), {**frozen, a12: 5}, None, None, 0, two),
@@ -506,14 +531,16 @@ def debreu_example_cases():
              ('vote-no-identity', data('vote', 1), base, None, None, 0, SENDER),
              ('vote-bad-code', data('vote', 4), base, None, None, 0, one),
              ('vote-value', data('vote', 1), base, None, None, 1, one),
-             ('vote-transfer', data('transfer', 2, 4), voted, {**voted, mu1: 1, mu2: 9, w1: 1, w2: 9}, 1, 0, one,
-              [transfer_log(1, 2, 4)]),
+             ('vote-transfer', data('transfer', 2, 4), voted,
+              {**voted, mu1: 1, mu2: 9, w1: 1, w2: 9, p11: 1, p12: 7}, 1, 0, one, [transfer_log(1, 2, 4)]),
              ('vote-erc20-transfer', data('erc20Transfer', 2, 5), {**opened, b1: 1, w1: 5, b2: 3, w3: 5},
-              {**opened, mu1: 0, mu2: 10, b1: 1, b2: 3, w3: 10}, 1, 0, one, [transfer_log(1, 2, 5)]),
+              {**opened, mu1: 0, mu2: 10, b1: 1, b2: 3, w3: 10, p11: 0, p12: 8}, 1, 0, one, [transfer_log(1, 2, 5)]),
              ('vote-transferfrom', data('transferFrom', 1, 3, 3), {**given, b1: 1, w1: 5, b3: 2},
-              {**given, a12: 2, mu1: 2, mu3: 3, b1: 1, w1: 2, b3: 2, w2: 3}, 1, 0, two, [transfer_log(1, 3, 3)]),
+              {**given, a12: 2, mu1: 2, mu3: 3, b1: 1, w1: 2, b3: 2, w2: 3, p11: 2, p13: 3}, 1, 0, two,
+              [transfer_log(1, 3, 3)]),
              ('vote-recover', data('recover', 2, 3, 2), {**base, b2: 1, w1: 5, b3: 3},
-              {**base, mu2: 3, mu3: 2, b2: 1, w1: 3, b3: 3, w3: 2}, 1, 0, one, [transfer_log(2, 3, 2)]),
+              {**base, mu2: 3, mu3: 2, b2: 1, w1: 3, b3: 3, w3: 2, p12: 1, p13: 2}, 1, 0, one,
+              [transfer_log(2, 3, 2)]),
              # W = 0 reverts (MY CALL 185); (8, 2, 0): floors (2, 0, 0), the seat left goes to the
              # larger remainder (code 2); (5, 0, 5): floors (1, 0, 1), the remainders tie, the seat
              # left goes to the lower code (seats (2, 0, 1), not (1, 0, 2)).
@@ -551,7 +578,8 @@ def accrual_cases(runtime, base):
             ('claim-none', data('claimOf', 3), {**base, INDEX: 30}, None, 0, 0, SENDER),
             ('claim-wrap', data('claimOf', 1), {**base, INDEX: 2**255}, None, None, 0, SENDER),
             ('transfer-settles', data('transfer', 2, 4), accrued,
-             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3}, 1, 0, one, [transfer_log(1, 2, 4)]),
+             {**accrued, mu1: 1, mu2: 9, num1: 19, cp1: 3, num2: 15, cp2: 3, parted(1, 1): 1, parted(1, 2): 7}, 1, 0,
+             one, [transfer_log(1, 2, 4)]),
             ('transfer-settle-wrap', data('transfer', 2, 4), {**base, INDEX: 2**255}, None, None, 0, one)]
     cases = table_cases('accrual-debreu', runtime, rows)
     for label, before, after, result, balance, sender, logs in (
@@ -695,7 +723,8 @@ def token_cases():
     # The allowance surface in token mode (O5c, MY CALL 163): the same body as in wei mode.
     a12 = allowed(1, 2)
     rows += [('transferfrom', data('transferFrom', 1, 3, 3), {**base, a12: 5},
-              {**base, a12: 2, mu1: 2, slot(MU, 3): 3}, 1, 'standard', {}, None, 0, wallet(4097),
+              {**base, a12: 2, mu1: 2, slot(MU, 3): 3, parted(1, 1): 2, parted(1, 3): 3}, 1, 'standard', {}, None, 0,
+              wallet(4097),
               [transfer_log(1, 3, 3)])]
     cases = sum(token_case(f'example-debreu-token-{label}', runtime, calldata, before,
                            before if after is None else after, result, variant=variant, held=store,

@@ -15,13 +15,17 @@
  * nested mapping. BALLOT (slot 11, identity -> code 0 .. k, 0 = no ballot)
  * and WEIGHT (slot 12, code -> units, the sum of MU over the identities
  * with that ballot) hold the weighted tally (O2, MY CALLs 182, 183 and
- * 186). In token mode, each amount in wei is an
+ * 186). PART (slot 13, partition code 1 .. 2, then identity -> units, a
+ * nested mapping as ALLOWANCE) holds the units of each partition; MU[h] is
+ * the sum over the partitions of PART[p][h] (O4, MY CALL 202 (a)). In token
+ * mode, each amount in wei is an
  * amount in carrier units. S, the sum of the genesis units, is a code
  * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
  *
- * Code data at LABEL_DATA: the R limit words, rows x 4 x 4 (charter code - 1,
- * profile of the sender, profile of the receiver; "admits q" = q < L), then
- * the W gate words, rows x 2 (pass 1, retain 0), 32 bytes each.
+ * Code data at LABEL_DATA: the R limit words, P x rows x 4 x 4 (partition
+ * code - 1, charter code - 1, profile of the sender, profile of the
+ * receiver; "admits q" = q < L), then the W gate words, rows x 2 (pass 1,
+ * retain 0), 32 bytes each.
  *
  * Program data (data.h): lang_domain_read gives the data that lang_data
  * (src/check.c) reads, and lang_domain_print writes it for the `data` verb. */
@@ -34,8 +38,12 @@ enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
   SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10, SLOT_BALLOT = 11,
-  SLOT_WEIGHT = 12
+  SLOT_WEIGHT = 12, SLOT_PART = 13
 };
+
+/* The Partition code of classA, the partition of the default moves
+ * transfer, transferFrom and recover (O4, MY CALL 203 (a)). */
+enum { PART_DEFAULT = 1 };
 
 /* MEM_CALL: the calldata of a carrier call, the selector at MEM_CALL and
  * word j at MEM_CALL + 4 + 32 j. The selector store also writes zero to
@@ -348,7 +356,7 @@ static void distribute(Asm *a, const EntryContext *c) {
   asm_op(a, OP_MUL);
   asm_argument(a, 0);
   asm_op(a, OP_ADD);
-  asm_push(a, data_rows(c) * LIMITS);
+  asm_push(a, LANG_PARTITIONS * data_rows(c) * LIMITS);
   asm_op(a, OP_ADD);
   data_word(a);
   asm_argument(a, 0);
@@ -525,11 +533,10 @@ static void approval_log(Asm *a) {
   erc20_log(a, "Approval(address,address,uint256)");
 }
 
-/* spender owner -> the slot of ALLOWANCE[owner][spender]:
- * keccak256(spender . keccak256(owner . SLOT_ALLOWANCE)), the Solidity
- * nested mapping (MY CALL 168). */
-static void allowance_slot(Asm *a) {
-  asm_slot(a, SLOT_ALLOWANCE);
+/* inner outer -> the slot of BASE[outer][inner]:
+ * keccak256(inner . keccak256(outer . BASE)), the Solidity nested mapping. */
+static void nested_slot(Asm *a, unsigned base) {
+  asm_slot(a, base);
   asm_push(a, 0x20);
   asm_op(a, OP_MSTORE);
   asm_op(a, OP_PUSH0);
@@ -537,6 +544,32 @@ static void allowance_slot(Asm *a) {
   asm_push(a, 0x40);
   asm_op(a, OP_PUSH0);
   asm_op(a, OP_SHA3);
+}
+
+/* spender owner -> the slot of ALLOWANCE[owner][spender] (MY CALL 168). */
+static void allowance_slot(Asm *a) {
+  nested_slot(a, SLOT_ALLOWANCE);
+}
+
+/* h p -> the slot of PART[p][h] (O4, MY CALL 202 (a)). */
+static void part_slot(Asm *a) {
+  nested_slot(a, SLOT_PART);
+}
+
+/* key -> (nothing): PART[classA][key] := PART[classA][key] - q (OP_SUB) or
+ * PART[classA][key] + q (OP_ADD), q the calldata word Q. The caller checks
+ * q <= PART[classA][key] before a debit, and credits after the checked
+ * credit of MU[key] (PART[p][key] <= MU[key]), so neither wraps. */
+static void part_term(Asm *a, Op op, unsigned q) {
+  asm_push(a, PART_DEFAULT);
+  part_slot(a);
+  asm_op(a, OP_DUP1);
+  asm_op(a, OP_SLOAD);
+  asm_argument(a, q);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, op);
+  asm_op(a, OP_SWAP1);
+  asm_op(a, OP_SSTORE);
 }
 
 /* Reverts when calldata word TO is 0 or TO + 1 overflows. Every destination
@@ -552,8 +585,10 @@ static void destination_guard(Asm *a, unsigned to) {
   asm_revert_if(a);
 }
 
-/* R: reverts when word Q >= R[CHARTER][PROFILE h][PROFILE to], with h at
- * memory MEM_ID and to the calldata word TO. */
+/* R: reverts when word Q >= R[classA][CHARTER][PROFILE h][PROFILE to], with
+ * h at memory MEM_ID and to the calldata word TO. The classA rows come
+ * first in the code data, so the partition offset (p - 1) * rows * LIMITS
+ * is 0 here (O4, MY CALL 207 (a)). */
 static void restriction_guard(Asm *a, unsigned to, unsigned q) {
   asm_argument(a, to);
   asm_slot(a, SLOT_PROFILE);
@@ -602,8 +637,8 @@ static void weight_term(Asm *a, Op op) {
 
 /* from to q -> (nothing) (O2, MY CALL 183 (a)): the vote moves with the
  * mass: WEIGHT[BALLOT[from]] -= q, then WEIGHT[BALLOT[to]] += q (code 0:
- * no term). The caller checks q <= MU[from] first; WEIGHT[BALLOT[from]]
- * includes MU[from], so the debit does not wrap. */
+ * no term). The caller checks q <= PART[classA][from] <= MU[from] first;
+ * WEIGHT[BALLOT[from]] includes MU[from], so the debit does not wrap. */
 static void move_vote(Asm *a) {
   asm_op(a, OP_DUP3);
   asm_slot(a, SLOT_BALLOT);
@@ -619,14 +654,16 @@ static void move_vote(Asm *a) {
 }
 
 /* The move of transfer, with h at memory MEM_ID, to the calldata word TO
- * and q the word Q: q > MU[h] reverts; settle h, then settle to (SPEC 5:
- * checkpoints both identities); the vote of q moves from h to to (O2);
- * MU[h] -= q, then MU[to] += q (read after the debit, so to = h keeps the
- * mass); logs Transfer(h, to, q), also at q = 0 and at to = h (O5a);
- * returns 1. */
+ * and q the word Q: q > PART[classA][h] reverts; settle h, then settle to
+ * (SPEC 5: checkpoints both identities); the vote of q moves from h to to
+ * (O2); MU[h] -= q, then MU[to] += q, then PART[classA][h] -= q, then
+ * PART[classA][to] += q (each credit read after its debit, so to = h keeps
+ * the mass, O4); logs Transfer(h, to, q), also at q = 0 and at to = h
+ * (O5a); returns 1. */
 static void move(Asm *a, unsigned to, unsigned q) {
   asm_load(a, MEM_ID);
-  asm_slot(a, SLOT_MU);
+  asm_push(a, PART_DEFAULT);
+  part_slot(a);
   asm_op(a, OP_SLOAD);
   asm_argument(a, q);
   asm_op(a, OP_GT);
@@ -656,6 +693,10 @@ static void move(Asm *a, unsigned to, unsigned q) {
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
+  asm_load(a, MEM_ID);
+  part_term(a, OP_SUB, q);
+  asm_argument(a, to);
+  part_term(a, OP_ADD, q);
   asm_argument(a, to);
   asm_load(a, MEM_ID);
   asm_argument(a, q);
@@ -809,11 +850,13 @@ static void attest(Asm *a, const EntryContext *c) {
 }
 
 /* recover from to q (ERC-1644 forced transfer, O3): the issuer guard;
- * from = 0, to = 0, from + 1 or to + 1 overflow reverts; q > MU[from]
- * reverts; R does not
+ * from = 0, to = 0, from + 1 or to + 1 overflow reverts;
+ * q > PART[classA][from] reverts; R does not
  * gate it; settle from, then settle to; the vote of q moves from from to
- * to (O2); MU[from] -= q, then MU[to] += q (read after the debit, so
- * to = from keeps the mass); logs Transfer(from, to, q) (O5a); returns 1. */
+ * to (O2); MU[from] -= q, then MU[to] += q, then PART[classA][from] -= q,
+ * then PART[classA][to] += q (each credit read after its debit, so
+ * to = from keeps the mass, O4); logs Transfer(from, to, q) (O5a);
+ * returns 1. */
 static void recover(Asm *a, const EntryContext *c) {
   issuer_guard(a, c);
   for (unsigned j = 0; j < 2; j++) {
@@ -826,7 +869,8 @@ static void recover(Asm *a, const EntryContext *c) {
     asm_revert_if(a);
   }
   asm_argument(a, 0);
-  asm_slot(a, SLOT_MU);
+  asm_push(a, PART_DEFAULT);
+  part_slot(a);
   asm_op(a, OP_SLOAD);
   asm_argument(a, 2);
   asm_op(a, OP_GT);
@@ -856,6 +900,10 @@ static void recover(Asm *a, const EntryContext *c) {
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
+  asm_argument(a, 0);
+  part_term(a, OP_SUB, 2);
+  asm_argument(a, 1);
+  part_term(a, OP_ADD, 2);
   asm_argument(a, 1);
   asm_argument(a, 0);
   asm_argument(a, 2);
@@ -1193,6 +1241,18 @@ static void store_entry(Asm *a, unsigned base, unsigned long long key, unsigned 
   asm_op(a, OP_SSTORE);
 }
 
+/* PART[p][key] := value, constant words (genesis, O4). */
+static void store_part(Asm *a, unsigned p, unsigned long long key, unsigned long long value) {
+  unsigned char word[WORD];
+  word_of(word, value, 0);
+  asm_push_word(a, word);
+  word_of(word, key, 0);
+  asm_push_word(a, word);
+  asm_push(a, p);
+  part_slot(a);
+  asm_op(a, OP_SSTORE);
+}
+
 /* The genesis event of identity h with units: Transfer(0, h, units) (O5a). */
 static void genesis_log(Asm *a, unsigned long long identity, unsigned long long units) {
   unsigned char word[WORD];
@@ -1240,8 +1300,9 @@ static void carrier_genesis(Asm *a) {
 /* The genesis writes: in token mode first CARRIER := the constructor word
  * (carrier_genesis); CHARTER := start; per row REGISTRY[w] := h + 1; per
  * distinct identity h, MU[h] := the sum of its units and PROFILE[h] := the
- * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a).
- * Zero words are not written. */
+ * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a);
+ * per distinct identity h and partition p, PART[p][h] := the sum of its
+ * units in p (O4). Zero words are not written. */
 void lang_domain_genesis(Asm *a, const LangContract *contract) {
   const LangDomainData *data = contract->data;
   if (data != NULL && data->asset == LANG_ASSET_TOKEN)
@@ -1269,22 +1330,32 @@ void lang_domain_genesis(Asm *a, const LangContract *contract) {
       store_entry(a, SLOT_MU, row->identity, units, 0);
       genesis_log(a, row->identity, units);
     }
+    for (unsigned p = 1; p <= LANG_PARTITIONS; p++) {
+      unsigned long long part = 0;
+      for (size_t j = i; j < rows; j++)
+        part += data->holder[j].identity == row->identity && data->holder[j].partition == p
+                    ? data->holder[j].units : 0;
+      if (part != 0)
+        store_part(a, p, row->identity, part);
+    }
     if (profile != 0)
       store_entry(a, SLOT_PROFILE, row->identity, profile, 0);
   }
 }
 
-/* The code data at LABEL_DATA: the R limit words, then the W gate words. */
+/* The code data at LABEL_DATA: the R limit words of each partition (classA
+ * first), then the W gate words. */
 void lang_domain_data(Asm *a, const EntryContext *c) {
   unsigned rows = data_rows(c);
   unsigned char word[WORD];
-  for (unsigned r = 0; r < rows; r++)
-    for (unsigned p = 0; p < LANG_PROFILES; p++)
-      for (unsigned q = 0; q < LANG_PROFILES; q++) {
-        LangCap deny = {LANG_CAP_DENY, 0};
-        limit_word(word, c->data == NULL ? deny : c->data->cap[0][r][p][q]);
-        put_word(a, word);
-      }
+  for (unsigned part = 0; part < LANG_PARTITIONS; part++)
+    for (unsigned r = 0; r < rows; r++)
+      for (unsigned p = 0; p < LANG_PROFILES; p++)
+        for (unsigned q = 0; q < LANG_PROFILES; q++) {
+          LangCap deny = {LANG_CAP_DENY, 0};
+          limit_word(word, c->data == NULL ? deny : c->data->cap[part][r][p][q]);
+          put_word(a, word);
+        }
   for (unsigned r = 0; r < rows; r++)
     for (unsigned k = 0; k < LANG_KINDS; k++) {
       word_of(word, c->data != NULL && c->data->pass[r][k] ? 1u : 0u, 0);
