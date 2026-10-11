@@ -4,9 +4,10 @@ interest-lang is a language for an ownership-interest DAO on the EVM. A
 program gives a constitution (a rule that chooses the active charter from
 the ballots of the `members` seats; each identity votes with its mass)
 and the program data of the contract: the
-start charter, the genesis units of each identity, the transfer
-restriction R and the payout waterfall W of each charter, and the trusted
-issuers. The compiler `interestc` checks the program, gives the verdict
+start charter, the genesis units of each identity in each partition
+(`classA` and `classB`, ERC-1400), the transfer restriction R of each
+charter and partition, the payout waterfall W of each charter, and the
+trusted issuers. The compiler `interestc` checks the program, gives the verdict
 table of the constitution and writes the EVM contract. The language comes
 from lang-template (commit `1aa27ae`) with the tcc-evm-dao host.
 

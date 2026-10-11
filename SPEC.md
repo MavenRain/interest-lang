@@ -157,6 +157,8 @@ change.
 | `Juris`, `Status` | identity claims ("Semantic domain") | finite `mu` enums in `domain/domain.lang` (O9): `Juris` has `domestic`, `foreign`; `Status` has `retail`, `accredited` (RULED 2026-10-08 (USER)) |
 | `Profile` | the claims that R reads | `prod (Juris, Status)` |
 | `Measure` | `mu : Identity -> Q>=0`, finite support ("Semantic domain") | `Identity -> Nat` with `empty`, `mass`, `credit`, `debit`. The meaning of n is n units of `1/S` of the interest, an injective monoid map into `Q>=0` (R2) |
+| `Partition` | an ERC-1400 partition (O4) | `mu` in `domain/domain.lang` (MY CALL 202): `classA`, `classB` (codes 1 and 2) |
+| `Book` | a coproduct of measures, one for each partition (O4) | `Partition -> Measure`. `bookTotal` is the codiagonal: the mass of h in the total is the sum of the masses of h in the partitions |
 | `Kind` | inflow kind ("Semantic domain") | `mu`: `rent`, `sale` |
 | `Gate` | `W(kind)` as a selector | `mu`: `pass`, `retain`. The meaning of `pass` is the identity and the meaning of `retain` is 0. Both are monoid endomorphisms, so W stays a homomorphism |
 | `Waterfall` | `W : Kind -> Asset -> Asset` ("Semantic domain") | `Kind -> Gate` |
@@ -164,7 +166,7 @@ change.
 | `Restriction` | `R : Identity x Identity x Q>=0 -> Prop` ("Semantic domain") | `Profile -> Profile -> Cap`; `R(h, k, q) := admits (rule (prof h) (prof k)) q`. R reads only identity claims |
 | `Charter` | an object of D: an admissible (R, W) and the trusted issuers ("Semantic domain", "One meaning, three representations") | finite `mu` of named charters in `domain/domain.lang`, decision codes in declaration order (O9); a program gives, for each charter, a `Restriction`, a `Waterfall` and an issuer list. M0 has 3 charters, `open`, `restricted`, `frozen` (codes 1 to 3), so k = 3 (RULED 2026-10-08 (USER)) |
 | `Treasury` | the treasury as an action of the aggregation | a reserve for each kind (asset units), an accrual index, a claim numerator for each identity (units of `1/S` asset unit, R2) and the dust (units of `1/S` asset unit, O11): `prod (Kind -> Nat, prod (Nat, prod (Identity -> Nat, Nat)))`. The embedded language and the EVM contract have the same fields |
-| `InterestState` | `(mu, W, R, treasury)` ("Semantic domain") | `prod (Measure, prod (Charter, Treasury))`; W and R come from the active charter |
+| `InterestState` | `(mu, W, R, treasury)` ("Semantic domain") | `prod (Book, prod (Charter, Treasury))` (O4); W and R come from the active charter, with one R for each partition |
 | `OwnershipDAO F` | `Sigma (L : Aggregation act F). InterestState` | `(L : Aggregation F) * InterestState` |
 
 `Asset` is a `uint256` amount of the program asset: native wei (the default)
@@ -189,7 +191,8 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 
 | Operation | Type | Meaning (design section "Operations are homomorphisms") |
 |---|---|---|
-| `transfer h k q s` | `Option InterestState` | `some (debit h q ; credit k q)` if and only if `k > 0`, `R(h, k, q)` and `q <= mass h`; otherwise `none` (identity 0 is no identity, O5b). Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
+| `transferIn p h k q s` | `Option InterestState` | O4. `some` (the book with `debit h q ; credit k q` in partition p) if and only if `k > 0`, `R p (h, k, q)` (the R of partition p, MY CALL 207) and `q <= mass (s.0 p) h`; otherwise `none` (identity 0 is no identity, O5b). The other partition does not change. Laws: identity at `q = 0` where defined, conservation of supply, associativity on admissible chains, commutativity of disjoint transfers |
+| `transfer h k q s` | `Option InterestState` | `transferIn classA h k q s` (O4, MY CALL 203): a move without a partition moves classA units |
 | `approve o p v A` | `Allowance` | O5c. `Allowance := Identity -> Identity -> Nat` is outside InterestState, as the registry is: `A f p` is the count of units of `f` that the spender `p` can move. `approve` sets `A o p` to `v`, and no other allowance changes. The state does not change. The contract also reverts when `o` or `p` is 0 (section 7, Guards). Laws: `approveSets`, `approveOther` |
 | `transferFrom p f k q s A` | `Option (prod (Allowance, InterestState))` | O5c. `none` when `A f p < q`; else `transfer f k q s` with `A f p` := `A f p - q`, and `none` when that transfer is `none`. The spender needs an allowance also when `p = f`. Thus `transfer` stays the only write to `mu`. Laws: `transferFromMoves` (the move of `transfer` by `f`), `transferFromAllowance` (the allowance falls by q), `transferFromOver` (q above the allowance: `none`), `transferFromRestricted` (R refuses: `none` with an allowance) |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
@@ -200,12 +203,22 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
 | `vote h c V` | `Votes` | O2. `Votes := Identity -> Option Ballot`: `none` (EVM code 0) is no ballot. `vote` sets the ballot of `h` to `c`, and no other ballot changes. A second vote replaces the first, and `none` withdraws it. The state does not change. `wtally m V xs` is the image of `m` along the ballots of the listed identities `xs` (`Voters`), counting each identity once even when it is repeated. Laws: `tallyMass`, `repeatedVoters`, `recastMoves`, `transferMovesVote`, `noDoubleVote` |
 | `amendW F L V xs s e` | `InterestState` | O2. W is the total of `wtally mu V xs`. When W is not 0, active charter := `rule F L` of the tally `seats members (wtally mu V xs)`. When W = 0, `s` does not change (no quorum). `e` proves that `seatTally members (wtally mu V xs)` has `members` seats (by evaluation, as for `Config`); `seatTally` pads W = 0 with `(members, 0, 0)` solely for this proof, while `seats` gives `(0, 0, 0)`. It does not move `mu` or the treasury. Laws: `seatsTotal`, `seatsQuota`, `amendWeighted`, `repeatedVotersAmend`, `amendKeeps`, `amendEmpty`, `diracDictator` |
-| `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3). `some (debit h q ; credit k q)` if and only if `c` is a trusted issuer (`I`) of the active charter and `q <= mass h`; otherwise `none`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
+| `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3): `recoverIn I classA c h k q s` (O4), with `k > 0` and `q <= mass (s.0 classA) h`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
+| `recoverIn I p c h k q s` | `Option InterestState` | O4. `recover` in partition p: `some` (the book with `debit h q ; credit k q` in partition p) if and only if `c` is a trusted issuer of the active charter, `k > 0` and `q <= mass (s.0 p) h`; otherwise `none`. R does not gate it. `recover I c h k q s` is `recoverIn I classA c h k q s` |
 
 Transfer then distribute: the claim travels with the token. Before a
 transfer moves `mu`, the contract checkpoints both identities: it settles
 their accrued numerators. Thus a later distribution reads the image measure,
 and transfer then distribute equals distribute on the image measure.
+
+The partitions (O4) are the prelude types `Partition` and `Book`.
+`examples/arrow-debreu.lang` checks 5 partition laws as equalities
+(`EqNat`): `partTotal` (the total mass of h is the sum of its partition
+masses), `transferKeepsPart` (a classB transfer moves classB units),
+`transferOtherPart` (a classB transfer does not change classA),
+`restrictByPartition` (each partition reads its own R) and
+`recoverInConserves` (a classB recover keeps the classB mass). A wrong
+value in a law gives TYPE_MISMATCH.
 
 The allowance (O5c) is the prelude type `Allowance`.
 `examples/arrow-debreu.lang` checks its 6 laws as equalities (`EqNat`):
@@ -258,15 +271,18 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   address. A missing or extra word, the word 0, a word with a bit above
   bit 159, or an address with no code reverts the creation. Then CARRIER
   := the word.
-- **Storage.** The `mu` mapping, the registry mapping (wallet to identity),
-  the profile mapping, the active charter slot, `reserve[rent]`,
-  `reserve[sale]`, the accrual index, the dust (O11), the carrier address
-  (CARRIER, slot 9, token mode only, O5b), the allowance mapping
-  (ALLOWANCE, slot 10, keyed by owner then spender identity, O5c), the
-  ballot mapping (BALLOT, slot 11, identity to code 0 to k, 0 = no ballot)
-  and the weight mapping (WEIGHT, slot 12, code to mass) (O2), and the checkpoint
-  and numerator mappings for each identity. A mapping slot is `keccak256(key word, base
-  slot word)`.
+- **Storage.** The `mu` mapping (MU, slot 0), the registry mapping (wallet
+  to identity, slot 1), the profile mapping (slot 2), the active charter
+  slot (CHARTER, slot 3), `reserve[rent]` and `reserve[sale]` (RESERVE,
+  slot 4), the accrual index (INDEX, slot 5), the checkpoint and numerator
+  mappings for each identity (slots 6 and 7), the dust (DUST, slot 8,
+  O11), the carrier address (CARRIER, slot 9, token mode only, O5b), the
+  allowance mapping (ALLOWANCE, slot 10, keyed by owner then spender
+  identity, O5c), the ballot mapping (BALLOT, slot 11, identity to code 0
+  to k, 0 = no ballot), the weight mapping (WEIGHT, slot 12, code to mass)
+  (O2) and the partition mapping (PART, slot 13, keyed by partition code
+  then identity, O4). A mapping slot is `keccak256(key word, base slot
+  word)`. The slot numbers are in `domain/entries.c`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
   profiles, the W gates, the issuers) and the verdict table are data in the
   runtime code. The runtime reads them with CODECOPY. The tally index comes
@@ -282,22 +298,38 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `balanceOf(h)` (MU[h], as `mass(h)`) and `totalSupply()` (S). At Debreu
   it also adds `transfer(address,uint256)` (the body of `transfer(to, q)`),
   `approve(spender, v)`, `allowance(owner, spender)` and
-  `transferFrom(from, to, q)` (O5c). In both regimes it adds the views
+  `transferFrom(from, to, q)` (O5c), and the ERC-1400 entries (O4, MY
+  CALL 206): the views `balanceOfByPartition(bytes32,address)`
+  (PART[p][h]) and `totalSupplyByPartition(bytes32)` (S_p, a code
+  constant), and the moves
+  `transferByPartition(bytes32,address,uint256,bytes)` (the `transfer`
+  move of partition p) and
+  `recoverByPartition(bytes32,address,address,uint256)` (the `recover`
+  move of partition p). Both moves return p as `bytes32`. For
+  `transferByPartition(p, to, q, data)`, the runtime requires only the
+  three fixed words p, to and q; it does not read or validate the bytes
+  offset or tail. A partition word other than 1 or 2 reverts. In both regimes it adds the views
   `name()` and `symbol()` (ABI strings: the program defs `name` and
   `symbol`, else "interest" and "INT") and `decimals()` (0: the mass is
-  whole units, O5c). Each argument is a `uint256` word, but
-  a facade argument of ABI type `address` is an identity word below 2^160;
+  whole units, O5c). Each fixed-size argument occupies a 32-byte ABI word;
+  partition p has type `bytes32`, and integer arguments have type `uint256`.
+  A facade argument of ABI type `address` is an identity word below 2^160;
   the runtime reads it as the identity word.
   The compiler computes each selector as `keccak256` of the signature.
   A ballot is the stored code of the caller identity (O2). `vote(c)` sets
-  BALLOT[h] and moves MU[h] in WEIGHT. `transfer`, `transferFrom` and
-  `recover` move q from WEIGHT[BALLOT[from]] to WEIGHT[BALLOT[to]].
+  BALLOT[h] and moves MU[h] in WEIGHT. `transfer`, `transferFrom`,
+  `recover` and the two partition moves move q from WEIGHT[BALLOT[from]]
+  to WEIGHT[BALLOT[to]], and in PART[p] (p = classA without a partition
+  word, O4).
   `amend()` gives the n seats of WEIGHT by the largest remainder (ties to
   the lower code) and reads the verdict table. The identity of the caller is the registry image of the caller
   address; `to` is an identity (O10).
 - **Events.** A successful `transfer` and a successful `recover` log one
   `Transfer(from, to, q)` record (LOG3, the ERC-20 event; `from` and `to`
-  are identities), also at `q = 0` and at `to = from`. The creation code
+  are identities), also at `q = 0` and at `to = from`. A successful
+  `transferByPartition` or `recoverByPartition` then logs one
+  `TransferByPartition(p, operator, from, to, q, "", "")` record (LOG4,
+  ERC-1410; the operator is the caller address, O4). The creation code
   logs `Transfer(0, h, MU[h])` for each genesis identity with units. A
   successful `withdraw` logs one `Paid(h, wallet, paid, dust)` record
   (LOG3; `h` and the calling wallet are topics, `paid` and the moved dust
@@ -308,12 +340,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   unchanged `v` (O5c). No other entry logs, and a revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
-  guard reverts. A refused transfer (R fails, `q > mass h`, `to = 0`, or
+  guard reverts. A refused transfer (R[p] fails, `q > PART[p][h]`, `to = 0`, or
   `to + 1` overflows the registry encoding) reverts and leaves the state
   unchanged. A refused recovery (the caller is not an issuer of the
-  active charter, `q > mass from`, `from = 0` or `to = 0`, or `from + 1`
+  active charter, `q > PART[p][from]`, `from = 0` or `to = 0`, or `from + 1`
   or `to + 1` overflows the registry encoding) reverts and leaves the
-  state unchanged. `attest` reverts at `h = 0`. `vote` reverts at identity
+  state unchanged. Here p is the supplied partition for `transferByPartition`
+  and `recoverByPartition`, and classA for `transfer`, `transferFrom` and
+  `recover`; `mass h` and MU[h] remain the total across both partitions.
+  `attest` reverts at `h = 0`. `vote` reverts at identity
   0, at c > k and on value. `amend()` reverts when the WEIGHT sum is 0.
   Identity 0 is no
   identity: the registry keeps `h + 1`, so the word 0 means that the
@@ -403,9 +438,16 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `example-debreu-recover-r-free` and `example-impossibility-recover` and
   the claims law calls `law-recover-*` pin this ruling.
 - O4. ERC-1400 partitions: a coproduct of measures with one R for each
-  partition. This is a later milestone. M0 to M3 have one partition and an
-  ERC-3643-shaped registry. The ERC-721 shape is an example program with
-  `S = 1` (a Dirac measure).
+  partition. RULED 2026-10-10 (USER), MY CALLs 202 to 210. M0 to M3 have
+  one partition and an ERC-3643-shaped registry. Slice O4 (2026-10-10):
+  B1 the partitions in the language and the program data, B2 the
+  partition mapping PART in the contract storage (each move also moves
+  PART[p]), B3 the 4 ERC-1400 entries (`balanceOfByPartition`,
+  `totalSupplyByPartition`, `transferByPartition` and
+  `recoverByPartition`), and B4 8 mutants by hand and the docs. The
+  ERC-721 shape is an example program with `S = 1` (a Dirac measure).
+  Open: votes by partition (O4b) and payouts by partition (O4c). They are
+  not planned.
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events. O5a (2026-10-09): the read facade and the `Transfer`
   event. O5b (2026-10-09): the ERC-20 asset carrier (R3 re-ruled,
@@ -488,6 +530,11 @@ differential 27 and 64 vectors, domain tests 11, settlement 253 cases with
 9 deploys (258 EVM calls under the gas ceiling), claims 20 sequences (530
 steps) with 126 law calls and 87 contract checks, the same token and
 allowance runs, and a vote run of 10 sequences (300 steps), 0 failures.
+After O4 (2026-10-10), `make check` passes with parse 28, check 62, build
+output 29, EVM boundaries 4, metadata 56 ABI comparisons, refusal 51,
+normal forms 10, differential 27 and 64 vectors, domain tests 11,
+settlement 293 cases with 9 deploys (298 EVM calls under the gas
+ceiling), and the same claims, token, allowance and vote runs, 0 failures.
 The kit debt of
 `docs/KIT-DEBT.md` is applied in lang-template `fa1131a`, and `a2ce1b8`
 is the first commit of

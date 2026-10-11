@@ -50,6 +50,12 @@ milestone of SPEC section 10 is open.
 - Authenticated weighted ballots (slice O2): `vote(c)` for each
   identity, the live weighted tally, and `amend()` by the largest
   remainder to n seats.
+- ERC-1400 partitions (slice O4): two partitions, `classA` and `classB`,
+  each with its own R. The contract keeps PART[p][h] (slot 13), and each
+  move also moves PART[p]. The ERC-1400 entries are
+  `balanceOfByPartition`, `totalSupplyByPartition`, `transferByPartition`
+  and `recoverByPartition`. The two moves log `Transfer` and
+  `TransferByPartition`, and return p.
 - Four examples: a Debreu charter vote, a labelled-constitution
   impossibility and an ERC-721 Dirac measure with S = 1 (slice I5), and
   the Debreu example in token mode (slice O5b).
@@ -78,8 +84,9 @@ milestone of SPEC section 10 is open.
   (`TYPE_FUEL`). Cause: it evaluates by C recursion on an 8 MB stack.
 - `Nat` in the checker is a 64-bit word (`TYPE_NAT` on an overflow). The
   contract computes with 256-bit words and reverts on a wrap.
-- At most 32 genesis rows, 4 profiles and 2 payment kinds
-  (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS` in `domain/data.h`).
+- At most 32 genesis rows, 4 profiles, 2 payment kinds and 2 partitions
+  (`LANG_GENESIS_MAX`, `LANG_PROFILES`, `LANG_KINDS`, `LANG_PARTITIONS` in
+  `domain/data.h`).
 - In the contract, when `withdraw` pays 1 wei or more, it moves NUM mod S of
   the identity to the treasury dust (DUST, slot 8). The whole wei of DUST
   go to the rent reserve, so less than 1 wei stays in DUST. A `withdraw`
@@ -106,6 +113,13 @@ milestone of SPEC section 10 is open.
   There are no rounds, no snapshot and no quorum (SPEC O2).
 - `amend()` decides on n = `members` seats: the largest remainder rounds
   the weighted tally, and ties go to the lower code.
+- A move without a partition word (`transfer`, the ERC-20 `transfer`,
+  `transferFrom` and `recover`) moves classA units only (O4). The
+  allowance has no partition: `transferFrom` spends it in classA.
+- The contract has no `partitionsOf`, `canTransferByPartition`, operators,
+  documents or issuance of ERC-1400 (O4).
+- The vote and the payouts read the total mass MU[h], not the mass of one
+  partition (SPEC O4b and O4c, not planned).
 
 ## Internal boundaries
 

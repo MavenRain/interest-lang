@@ -140,8 +140,9 @@ that alias the source file, including hard links and symlinks
     needs no change to `src/`.
 
 13. Status 2026-10-10: stays a difference (slice K5, MY CALL 200). Slice
-    O5c has two other core changes. `EVM_ENTRIES` (`src/evm.c`) is 24,
-    because the Debreu tables list 20 entries; lang-template
+    O5c has two other core changes. `EVM_ENTRIES` (`src/evm.c`) is 32,
+    because the Debreu tables list 28 entries (slice O4, MY CALL 208 (a);
+    it was 24 for 20 entries at O5c); lang-template
     `hosts/tcc-evm-dao/src/evm.c` keeps 16. The `Makefile` builds
     `build/metadata` from `test/metadata.c` with tcc, `check-clang`
     compiles `test/metadata.c`, and `check` runs it (`test/gate.sh`). The
@@ -162,6 +163,17 @@ that alias the source file, including hard links and symlinks
     ownership weights. `asm_verdict` does not use `members` and `k`;
     the bound table must correspond to those parameters. lang-template
     `hosts/tcc-evm-dao/src/evm.c` keeps the table read in `asm_tally`.
+
+## Partitions (slice O4)
+
+15. Status 2026-10-10: a difference (slice O4, MY CALL 208 (a)). The
+    program data has partitions: `src/check.c` reads a genesis row `hrow`
+    with 6 arguments (one is the partition code), and reads `restrict`
+    with a `Partition` argument, one R for each partition
+    (`LANG_PARTITIONS`). `src/asm.h` has the new opcode `OP_LOG4` (0xa4)
+    for the `TransferByPartition` record; the kit has `OP_LOG3` only.
+    Item 13 records `EVM_ENTRIES` 32. The dao kit has no partitions, so
+    this item stays a difference until a later K slice rules it.
 
 ## Differences that remain
 

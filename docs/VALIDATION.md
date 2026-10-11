@@ -6,15 +6,15 @@ Darwin). geth: evm 1.14.12-stable. Foundry: cast 0.3.0 (5a8bd89
 `make` from this tree (the tree has commits). Host kit: lang-template
 `hosts/tcc-evm-dao` at `1aa27ae`.
 
-`make check` passes after slice O2. It builds `build/interestc`,
+`make check` passes after slice O4. It builds `build/interestc`,
 `build/parsetool`, `build/evm-boundaries`, `build/metadata` and the three
 test-domain compilers with tcc, compiles the sources and the test tools with the C
 compiler as a second check (`check-clang`), and runs `test/gate.sh`. The
-gate runs these steps: parse 28 round trips, embed-safety, check 61 cases,
+gate runs these steps: parse 28 round trips, embed-safety, check 62 cases,
 build output 29 checks, EVM signature boundaries 4 checks, metadata 56
-ABI comparisons, refusal 49 cases, normal forms 10, the differential test (27 vectors at k = 3),
+ABI comparisons, refusal 51 cases, normal forms 10, the differential test (27 vectors at k = 3),
 domain tests 11, the differential test of the k = 4 domain (64 vectors),
-settlement 253 cases with 9 deploys and a gas ceiling on their 258 EVM
+settlement 293 cases with 9 deploys and a gas ceiling on their 298 EVM
 calls (`test/gas-baseline.txt`), and claims (20 sequences totaling 530
 steps, 126 law calls, 87 contract checks, a token run of 10 sequences
 totaling 200 steps, an allowance run of 10 sequences totaling 200
@@ -290,6 +290,41 @@ and a move of weight. With no `vote` draw, this check fails
 'vote0', 'weight-moves']`). The 42 vote law calls check `recastMoves`
 (12), `transferMovesVote` (18) and `noDoubleVote` (9) at a Debreu state
 with two voters, and the Dirac dictator (3) on the ERC-721 program.
+
+In slice O4, the mass of an identity became a book of two partitions,
+`classA` and `classB` (SPEC O4). B1 added `Partition`, `Book`,
+`transferIn` and `recoverIn` to the language, a partition code on each
+genesis row and one R for each partition. `examples/arrow-debreu.lang`
+checks 5 partition laws: `partTotal`, `transferKeepsPart`,
+`transferOtherPart`, `restrictByPartition` and `recoverInConserves`. The
+mutant `test/mutants/debreu-part-93.lang` (a wrong `transferKeepsPart`)
+fails the check with TYPE_MISMATCH, so check went from 61 to 62 cases.
+Refusal went from 49 to 51 cases. B2 added the partition mapping PART
+(slot 13): each move also moves PART[p], and a move without a partition
+word moves classA. `test/settlement.py` got 2 more cases (255), and 56
+gas lines changed, because the moves and the deploys also write PART. B3
+added 4 ERC-1400 entries to the Debreu tables (28 entries, `EVM_ENTRIES`
+32): `balanceOfByPartition`, `totalSupplyByPartition`,
+`transferByPartition` and `recoverByPartition`. The two moves log
+`Transfer`, then `TransferByPartition` (LOG4), and return p.
+`test/settlement.py` got 38 more cases (293, deploy 9), and the gas
+ceiling went to 298 calls. The B3 gas lines are the 38 new cases, the 4
+deploys (code size) and the 2 unknown-selector reverts (565 to 653 gas, 4
+more selector compares). `test/claims.py` models PART, and its runs draw
+the 4 entries; the sequences and the step counts do not change.
+
+Eight mutants of `domain/entries.c` make `test/settlement.py` fail on a
+case result (B4). The mutant runs wrote the gas file again, so a gas
+change alone did not count. M1, the partition guard accepts the word 3
+(`example-debreu-part-balance-word-3` fails first); M2, the guard accepts
+the word 0 (`-part-balance-word-0`); M3, a classB move debits classA
+(`-part-transfer-classb`); M4, classB reads the classA R
+(`-part-transfer-classb-retail`); M5, the from and to topics of
+`TransferByPartition` change places (`-part-transfer-admit`); M6, a
+partition move returns 1, not p (`-part-transfer-classb`); M7,
+`recoverByPartition` has no issuer check (`-part-recover-non-issuer`);
+and M8, `totalSupplyByPartition` gives S_1 for each p
+(`-part-supply-b`).
 
 `test/evm-boundaries.c` exercises the public writer with a small domain. It
 accepts signatures needing exactly 512 bytes including the NUL and refuses
