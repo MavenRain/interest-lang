@@ -1,0 +1,118 @@
+def members : Nat := 3
+-- ERC-721 as a Dirac measure (host README, The domain).  The supply S is 1:
+-- one unit, at one identity, that moves whole.  The ownership model of
+-- ERC-721 and not its ABI: mass h = 1 tells the owner.  The regime is
+-- Arrow-Debreu (transfer is an Arrow-Debreu entry).
+-- `H` is a veto rule: one frozen ballot freezes the token; else
+-- `restricted` wins only by a strict majority over `open`.  `c` is the
+-- count triple (open, restricted, frozen).
+def veto : T3 -> Charter := fun (c : T3) =>
+  case natLt 0 c.1.1 with
+  | 0 (u : prod ()) =>
+    (case natLt c.0 c.1.0 with
+     | 0 (v : prod ()) => open
+     | 1 (v : prod ()) => restricted)
+  | 1 (u : prod ()) => frozen
+def H : Tally -> Charter := fun (t : Tally) => veto (counts t)
+
+def F : ChoiceRule := fun (x : Config) => H (orbit x)
+def agg : Aggregation F := mkAgg F H (fun (x : Config) => reflDec (H (orbit x)))
+def selfF : IsSelfConstituting F := selfConstitutes F agg
+
+-- cast: one frozen ballot gives frozen, and two configurations in one
+-- orbit give one verdict.
+def xs : Ballots := bcons open (bcons frozen (bcons open bnil))
+def x : Config := mkConfig xs (reflNat 3)
+def ys : Ballots := bcons frozen (bcons open (bcons open bnil))
+def y : Config := mkConfig ys (reflNat 3)
+def vetoX : EqDec (gov F agg x) frozen := reflDec frozen
+def castXY : EqDec (gov F agg x) (gov F agg y) := castOrbit F agg x y (reflTally (orbit x))
+
+-- The Dirac measure: the one unit is at identity 1.
+def m1 : Measure := credit empty 1 1
+def ownerOne : EqNat (mass m1 1) 1 := reflNat 1
+def ownerTwo : EqNat (mass m1 2) 0 := reflNat 0
+
+-- `restrict` gives the restriction of each charter: `open` admits any
+-- amount, `restricted` admits a transfer to an accredited receiver only,
+-- `frozen` admits nothing.  Identity 2 is foreign accredited, each other
+-- identity is domestic retail.
+-- classB has the restriction of classA.
+def restrict : Partition -> Charter -> Restriction := fun (t : Partition) (c : Charter) (p : Profile) (r : Profile) =>
+  match c as w in Charter return Cap with
+  | open => any
+  | restricted => (match r.1 as v in Status return Cap with
+    | retail => deny
+    | accredited => any)
+  | frozen => deny
+def prof : Profiles := fun (h : Identity) =>
+  case natEq h 2 with
+  | 0 (u : prod ()) => tuple (domestic, retail)
+  | 1 (u : prod ()) => tuple (foreign, accredited)
+def t0 : Treasury := tuple (fun (j : Kind) => 0, tuple (0, tuple (fun (h : Identity) => 0, 0)))
+-- `inA m` is the book with the measure m at classA and none at classB.
+def inA : Measure -> Book := fun (m : Measure) => setPart (fun (c : Partition) => empty) classA m
+def s0 : InterestState := tuple (inA m1, tuple (open, t0))
+def stateOr : InterestState -> Option InterestState -> InterestState :=
+  fun (d : InterestState) (o : Option InterestState) =>
+    case o with
+    | 0 (u : prod ()) => d
+    | 1 (t : InterestState) => t
+
+-- transfer moves the whole unit from identity 1 to identity 2: the measure
+-- stays a Dirac measure.
+def e1 : Le 1 (mass (s0.0 classA) 1) := (0, reflNat 1)
+def s1 : InterestState := stateOr s0 (transfer restrict prof 1 2 1 s0 e1)
+def transferMoves : EqNat (mass (s1.0 classA) 2) 1 := reflNat 1
+def transferLeaves : EqNat (mass (s1.0 classA) 1) 0 := reflNat 0
+
+-- Weighted vote (O2): the one unit is at identity 1.  The holder votes
+-- frozen and gets all `members` seats: a Dirac measure is a dictator.
+def diracDictator : EqT3 (seats members (wtally m1 (vote 1 (pureOption Ballot frozen) noVotes) (vcons 1 (vcons 2 vnil)))) (tuple (0, tuple (0, 3))) := reflT3 (tuple (0, tuple (0, 3)))
+
+-- The restricted charter admits the transfer to identity 2 (accredited)
+-- and not the transfer to identity 3 (retail): the fallback s0 keeps the
+-- unit at identity 1.
+def sR : InterestState := tuple (inA m1, tuple (restricted, t0))
+def restrictedAccredited : EqNat (mass ((stateOr s0 (transfer restrict prof 1 2 1 sR e1)).0 classA) 2) 1 := reflNat 1
+def restrictedRetail : EqNat (mass ((stateOr s0 (transfer restrict prof 1 3 1 sR e1)).0 classA) 1) 1 := reflNat 1
+
+-- The ERC-721 approvals (O5d, MY CALL 220).  `n0` has no approved identity
+-- and no operator; identity 1 holds the unit (s0).  `nftOr d o` is `d` when
+-- the move `o` is none.  `d0` approves identity 3, so a none moves nothing
+-- and keeps the approval.  `refusedNft o` is 1 when `o` is none, else 0.
+def n0 : Nft := tuple (0, fun (f : Identity) (g : Identity) => 0)
+def d0 : prod (Nft, InterestState) := tuple (approveNft 3 n0, s0)
+def nftOr : prod (Nft, InterestState) -> Option (prod (Nft, InterestState)) -> prod (Nft, InterestState) :=
+  fun (d : prod (Nft, InterestState)) (o : Option (prod (Nft, InterestState))) =>
+    case o with
+    | 0 (u : prod ()) => d
+    | 1 (t : prod (Nft, InterestState)) => t
+def refusedNft : Option (prod (Nft, InterestState)) -> Nat :=
+  fun (o : Option (prod (Nft, InterestState))) =>
+    case o with
+    | 0 (u : prod ()) => 1
+    | 1 (t : prod (Nft, InterestState)) => 0
+
+-- The owner 1 moves the unit to identity 2: identity 2 is the owner.
+def o1 : prod (Nft, InterestState) := nftOr d0 (transferNft restrict prof 1 1 2 s0 n0 e1)
+def ownerAfterTransfer : EqNat (mass (o1.1.0 classA) 2) 1 := reflNat 1
+
+-- A move clears the approved identity (3 before the move).
+def o2 : prod (Nft, InterestState) := nftOr d0 (transferNft restrict prof 1 1 2 s0 (approveNft 3 n0) e1)
+def approvalClears : EqNat o2.0.0 0 := reflNat 0
+
+-- The approved identity 3 moves the unit of identity 1 to identity 2.
+def o3 : prod (Nft, InterestState) := nftOr d0 (transferNft restrict prof 3 1 2 s0 (approveNft 3 n0) e1)
+def approvedMoves : EqNat (mass (o3.1.0 classA) 2) 1 := reflNat 1
+
+-- The operator 3 of identity 1 moves the unit of identity 1 to identity 2.
+def o4 : prod (Nft, InterestState) := nftOr d0 (transferNft restrict prof 3 1 2 s0 (setOperator 1 3 1 n0) e1)
+def operatorMoves : EqNat (mass (o4.1.0 classA) 2) 1 := reflNat 1
+
+-- Identity 3, with no approval and no operator flag, cannot move the unit.
+def strangerRefused : EqNat (refusedNft (transferNft restrict prof 3 1 2 s0 n0 e1)) 1 := reflNat 1
+
+-- After the operator move, identities 1 .. 3 hold 1 unit in total, so each
+-- has 0 or 1: the measure stays a Dirac measure.
+def balanceDirac : EqNat (natAdd (mass (o4.1.0 classA) 1) (natAdd (mass (o4.1.0 classA) 2) (mass (o4.1.0 classA) 3))) 2 := reflNat 2

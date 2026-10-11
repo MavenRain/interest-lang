@@ -1543,7 +1543,7 @@ static const char *cap_text(LangCap cap, char *buf, size_t size) {
  * group of 16 caps per charter, profile pairs row-major), waterfall (one
  * group per charter: p pass, r retain, for rent then sale), issuers c:h,
  * name and symbol (O5c), then `asset token` in token mode only (no line
- * for wei, MY CALL 155).
+ * for wei, MY CALL 155), then `facade erc721` at erc721 only (MY CALL 213).
  * DATA is not NULL (lang_domain_read). */
 void lang_domain_print(const LangDomainData *data, FILE *out) {
   fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
@@ -1568,4 +1568,6 @@ void lang_domain_print(const LangDomainData *data, FILE *out) {
           (int)data->symbol.length, (const char *)data->symbol.byte);
   if (data->asset == LANG_ASSET_TOKEN)
     fputs("asset token\n", out);
+  if (data->facade == LANG_FACADE_ERC721)
+    fputs("facade erc721\n", out);
 }

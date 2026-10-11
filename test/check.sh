@@ -189,6 +189,18 @@ refuse "mutant debreu amendMass reflNat 4" TYPE_MISMATCH amendMass \
   "the types differ: expected EqNat 5 5, found EqNat 4 4" check "$root/test/mutants/debreu-amend-4.lang"
 refuse "mutant debreu transferKeepsPart classA write" TYPE_MISMATCH transferKeepsPart \
   "the types differ: expected EqNat 0 2, found EqNat 2 2" check "$root/test/mutants/debreu-part-93.lang"
+refuse "mutant dirac ownerAfterTransfer stated at 0" TYPE_MISMATCH ownerAfterTransfer \
+  "the types differ: expected EqNat 1 0, found EqNat 0 0" check "$root/test/mutants/dirac-owner-0.lang"
+refuse "mutant dirac approvalClears stated at 3" TYPE_MISMATCH approvalClears \
+  "the types differ: expected EqNat 0 3, found EqNat 3 3" check "$root/test/mutants/dirac-clears-3.lang"
+refuse "mutant dirac approvedMoves stated at 0" TYPE_MISMATCH approvedMoves \
+  "the types differ: expected EqNat 1 0, found EqNat 0 0" check "$root/test/mutants/dirac-approved-0.lang"
+refuse "mutant dirac operatorMoves stated at 0" TYPE_MISMATCH operatorMoves \
+  "the types differ: expected EqNat 1 0, found EqNat 0 0" check "$root/test/mutants/dirac-operator-0.lang"
+refuse "mutant dirac strangerRefused stated at 0" TYPE_MISMATCH strangerRefused \
+  "the types differ: expected EqNat 1 0, found EqNat 0 0" check "$root/test/mutants/dirac-stranger-0.lang"
+refuse "mutant dirac balanceDirac stated at 2" TYPE_MISMATCH balanceDirac \
+  "the types differ: expected EqNat 1 2, found EqNat 2 2" check "$root/test/mutants/dirac-balance-2.lang"
 refuse "verdicts of a name that is not a ChoiceRule" VERDICT_TYPE agg "agg is not a ChoiceRule" \
   verdicts "$programs/arrow-debreu.lang" agg
 refuse "eval of an unknown name" TYPE_SCOPE nothing "nothing is not declared" \
@@ -231,13 +243,29 @@ restrict 2 a,a,a,a,a,a,a,a,a,a,a,a,a,a,a,a d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,d,d
 waterfall pp pp rr
 issuers 1:1 2:1
 name interest
-symbol INT" data "$programs/erc721-dirac.lang"
+symbol INT
+facade erc721" data "$programs/erc721-dirac.lang"
 printf 'def members : Nat := 1\ndef start : Nat := 1\n' > "$out/start-nat.lang"
 refuse "a program def start of another type is CONTRACT_TYPE" CONTRACT_TYPE start \
   "does not have its program data type (SPEC section 7)" data "$out/start-nat.lang"
 printf 'def members : Nat := 1\ndef asset : Nat := 1\n' > "$out/asset-nat.lang"
 refuse "a program def asset of another type is CONTRACT_TYPE" CONTRACT_TYPE asset \
   "does not have its program data type (SPEC section 7)" data "$out/asset-nat.lang"
+# The ERC-721 facade (O5d, MY CALL 218): one classA unit, wei, Arrow-Debreu.
+printf 'def members : Nat := 1\ndef facade : Nat := 2\n' > "$out/facade-nat.lang"
+refuse "a program def facade of another type is CONTRACT_TYPE" CONTRACT_TYPE facade \
+  "does not have its program data type (SPEC section 7)" data "$out/facade-nat.lang"
+for row in '2 classA' '1 classB'; do
+  printf 'def members : Nat := 1\ndef facade : Facade := erc721\ndef genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) %s hnil\n' "$row" > "$out/facade-genesis.lang"
+  refuse "facade erc721 with the genesis row $row is CONTRACT_GENESIS" CONTRACT_GENESIS facade \
+    "is erc721 and the genesis is not one unit in classA" data "$out/facade-genesis.lang"
+done
+printf 'def members : Nat := 1\ndef facade : Facade := erc721\ndef asset : AssetMode := token\ndef genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 1 classA hnil\n' > "$out/facade-token.lang"
+refuse "facade erc721 with asset token is CONTRACT_VALUE" CONTRACT_VALUE facade \
+  "is erc721 and the asset is token" data "$out/facade-token.lang"
+printf 'def members : Nat := 1\ndef facade : Facade := erc721\ndef genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 1 classA hnil\n' > "$out/facade-impossibility.lang"
+refuse "facade erc721 at impossibility is CONTRACT_VALUE" CONTRACT_VALUE facade \
+  "is erc721 and the regime is impossibility" data "$out/facade-impossibility.lang"
 
 # Each append of a list to itself doubles it; the evaluation of the long
 # appends nests past the depth cap, and the run stops with TYPE_FUEL.

@@ -1,7 +1,7 @@
 /* The program data of interestc (SPEC section 7, I3 plan MY CALLs 11-12):
  * the start charter, the genesis rows, the charter tables and the asset,
  * read from the optional program defs start, genesis, restrict, waterfall,
- * issuers, asset, name and symbol.
+ * issuers, asset, facade, name and symbol.
  * src/evm.h declares LangDomainData, and the domain defines it here (host
  * README, The domain). lang_data (src/check.c) reads it, and the hooks
  * lang_domain_read and lang_domain_print (domain/entries.c) give it to the
@@ -20,6 +20,8 @@ typedef struct {
 typedef struct { unsigned charter; unsigned long long identity; } LangIssuer;
 /* The asset of the contract (SPEC section 7, O5b). */
 typedef enum { LANG_ASSET_WEI, LANG_ASSET_TOKEN } LangAsset;
+/* The token facade of the contract (SPEC section 7, O5d MY CALL 213). */
+typedef enum { LANG_FACADE_ERC20, LANG_FACADE_ERC721 } LangFacade;
 /* A Text def (SPEC section 7, O5c): at most LANG_TEXT_MAX bytes, each
  * 32 .. 126. The defaults when the def name or symbol is absent. */
 typedef struct { size_t length; unsigned char byte[LANG_TEXT_MAX]; } LangText;
@@ -35,10 +37,11 @@ struct LangDomainData {
   size_t issuers;
   LangIssuer issuer[LANG_DECISIONS_MAX * LANG_GENESIS_MAX];
   LangAsset asset;             /* the def asset; absent: wei */
+  LangFacade facade;           /* the def facade; absent: erc20 */
   LangText name, symbol;       /* the defs name and symbol; absent: the defaults */
 };
 /* The reader of lang_domain_read: the optional program defs start, genesis,
- * restrict, waterfall, issuers, asset, name and symbol, read by name and exact
+ * restrict, waterfall, issuers, asset, facade, name and symbol, read by name and exact
  * type over the finite tables above; the defaults when a def is absent.
  * Errors: CONTRACT_TYPE, CONTRACT_VALUE, CONTRACT_GENESIS. */
 int lang_data(LangChecked *checked, LangDomainData *data);

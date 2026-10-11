@@ -1705,6 +1705,24 @@ static int seen_identity(const LangDomainData *data, size_t i) {
   return 0;
 }
 
+/* The ERC-721 facade (O5d, MY CALL 218): the genesis has one unit (S = 1)
+ * in a classA row, the asset is wei and the regime is Arrow-Debreu, else
+ * CONTRACT_GENESIS or CONTRACT_VALUE. */
+static void data_erc721(LangChecked *c, const LangDomainData *data) {
+  unsigned long long units = 0;
+  unsigned partition = 0;
+  for (size_t i = 0; i < data->holders; i++) {
+    units += data->holder[i].units;
+    partition = data->holder[i].units > 0 ? data->holder[i].partition : partition;
+  }
+  if (units != 1 || partition != 1)
+    refuse(c, "CONTRACT_GENESIS", "facade", "is erc721 and the genesis is not one unit in classA");
+  if (!c->failed && data->asset == LANG_ASSET_TOKEN)
+    refuse(c, "CONTRACT_VALUE", "facade", "is erc721 and the asset is token");
+  if (!c->failed && c->regime == LANG_REGIME_IMPOSSIBILITY)
+    refuse(c, "CONTRACT_VALUE", "facade", "is erc721 and the regime is impossibility");
+}
+
 int lang_data(LangChecked *c, LangDomainData *data) {
   memset(data, 0, sizeof *data);
   data->start = 1;
@@ -1729,6 +1747,9 @@ int lang_data(LangChecked *c, LangDomainData *data) {
   Value *asset = data_def(c, "asset", data_type(c, "AssetMode"));
   if (asset != NULL)
     data->asset = data_code(c, asset, find_global(c, "AssetMode"), "asset") == 2 ? LANG_ASSET_TOKEN : LANG_ASSET_WEI;
+  Value *facade = data_def(c, "facade", data_type(c, "Facade"));
+  if (facade != NULL)
+    data->facade = data_code(c, facade, find_global(c, "Facade"), "facade") == 2 ? LANG_FACADE_ERC721 : LANG_FACADE_ERC20;
   Value *name = data_def(c, "name", data_type(c, "Text"));
   if (name != NULL)
     data_text(c, name, &data->name, "name");
@@ -1770,5 +1791,7 @@ int lang_data(LangChecked *c, LangDomainData *data) {
       if (v->nat == 1)
         data->issuer[data->issuers++] = (LangIssuer){(unsigned)i + 1, data->holder[h].identity};
     }
+  if (data->facade == LANG_FACADE_ERC721 && !c->failed)
+    data_erc721(c, data);
   return c->failed ? LANG_EXIT_REFUSED : LANG_EXIT_OK;
 }

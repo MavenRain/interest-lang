@@ -88,6 +88,7 @@ class Program:
     constituting: int
     verdicts: str = ''
     token: bool = False
+    facade: bool = False
     erc20_name: str = 'interest'
     erc20_symbol: str = 'INT'
     classb: tuple = ()
@@ -106,7 +107,8 @@ class Program:
             'waterfall ' + ' '.join(self.waterfall),
             'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers),
             f'name {self.erc20_name}', f'symbol {self.erc20_symbol}']
-                         + (['asset token'] if self.token else [])) + '\n'
+                         + (['asset token'] if self.token else [])
+                         + (['facade erc721'] if self.facade else [])) + '\n'
 
 
 # examples/arrow-debreu.lang: restrict open any, restricted upTo 4, frozen deny; wallet 4098
@@ -125,10 +127,12 @@ IMPOSSIBILITY = Program(
     ('deposit', 'withdraw', 'attest', 'mass', 'supply', 'claimOf', 'charter', 'reserve',
      'selfConstituting', 'balanceOf', 'totalSupply'), 0)
 # examples/erc721-dirac.lang: one unit (S = 1) at identity 1; restricted admits an accredited
-# receiver only (the profile code is 2 juris + status, so the odd codes).
+# receiver only (the profile code is 2 juris + status, so the odd codes). The def `facade` is
+# erc721 (O5d B1, MY CALL 224); the code data ignores it until B2.
 ERC721 = Program(
     'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1, 1), (4097, 2, 3, 0, 1), (4098, 3, 0, 0, 1)),
-    (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1)
+    (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1,
+    facade=True)
 # examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b), and no
 # `name` or `symbol` def (the defaults, O5c), and every wallet in partition 1.
 DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True,

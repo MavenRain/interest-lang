@@ -480,6 +480,13 @@ mu AssetMode : Type 0 :=
   | wei : AssetMode
   | token : AssetMode
 
+-- SPEC section 7: the token facade of the contract, the optional program
+-- def `facade` (O5d).  `erc20` (the default) gives the ERC-20 entries;
+-- `erc721` gives the ERC-721 entries, at S = 1 only.
+mu Facade : Type 0 :=
+  | erc20 : Facade
+  | erc721 : Facade
+
 -- SPEC section 7: the ERC-20 name and symbol, the optional program defs
 -- `name` and `symbol` (O5c).  A `Text` is a list of bytes, each 32 .. 126,
 -- at most 32 bytes.  An absent def gives "interest" and "INT".
@@ -646,6 +653,50 @@ def transferFrom : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -
         (fun (t : InterestState) => tuple (approve f p (natSub (A f p) q) A, t))
         (transfer R P f k q s e)
     | 1 (u : prod ()) => none (prod (Allowance, InterestState))
+
+-- `Nft` (O5d, MY CALL 220, SPEC section 5): the ERC-721 approvals of the
+-- one unit at S = 1.  `n.0` is the approved identity (0 is none), and
+-- `n.1 f p` is not 0 when `p` is an operator of `f`.  Nft is outside
+-- InterestState, as Allowance is.  `approveNft a n` sets the approved
+-- identity to `a`.  `setOperator o p v n` sets `n.1 o p` to `v` (the
+-- `approve` form); no other operator changes.
+def Nft : Type 0 := prod (Identity, Identity -> Identity -> Nat)
+
+def approveNft : Identity -> Nft -> Nft :=
+  fun (a : Identity) (n : Nft) => tuple (a, n.1)
+
+def setOperator : Identity -> Identity -> Nat -> Nft -> Nft :=
+  fun (o : Identity) (p : Identity) (v : Nat) (n : Nft) => tuple (n.0, approve o p v n.1)
+
+-- `mayMoveNft p f n`: leg 1 when the caller `p` is not 0 and is `f`, the
+-- approved identity `n.0` or an operator of `f`, else leg 0.
+def mayMoveNft : Identity -> Identity -> Nft -> Option (prod ()) :=
+  fun (p : Identity) (f : Identity) (n : Nft) =>
+    case natEq p 0 with
+    | 0 (u : prod ()) =>
+      (case natEq p f with
+       | 0 (v : prod ()) =>
+         (case natEq p n.0 with
+          | 0 (w : prod ()) =>
+            (case natEq (n.1 f p) 0 with
+             | 0 (x : prod ()) => pureOption (prod ()) (tuple ())
+             | 1 (x : prod ()) => none (prod ()))
+          | 1 (w : prod ()) => pureOption (prod ()) (tuple ()))
+       | 1 (v : prod ()) => pureOption (prod ()) (tuple ()))
+    | 1 (u : prod ()) => none (prod ())
+
+-- `transferNft R P p f k s n e`: the caller `p` moves the one unit of f to
+-- k.  It is `transfer R P f k 1 s e` when `mayMoveNft p f n` is leg 1, and
+-- then the approved identity is 0; else it is none.  It is none when that
+-- transfer is none.  The operators do not change.
+def transferNft : (R : Partition -> Charter -> Restriction) -> (P : Profiles) -> (p : Identity) -> (f : Identity) -> (k : Identity) -> (s : InterestState) -> (n : Nft) -> (0 e : Le 1 (mass (s.0 classA) f)) -> Option (prod (Nft, InterestState)) :=
+  fun (R : Partition -> Charter -> Restriction) (P : Profiles) (p : Identity) (f : Identity) (k : Identity) (s : InterestState) (n : Nft) (0 e : Le 1 (mass (s.0 classA) f)) =>
+    case mayMoveNft p f n with
+    | 0 (u : prod ()) => none (prod (Nft, InterestState))
+    | 1 (u : prod ()) =>
+      mapOption InterestState (prod (Nft, InterestState))
+        (fun (t : InterestState) => tuple (approveNft 0 n, t))
+        (transfer R P f k 1 s e)
 
 -- `deposit i a s`: the reserve of kind `i` grows by `a`.  The measure and
 -- the charter do not change.
