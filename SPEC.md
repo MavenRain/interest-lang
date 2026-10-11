@@ -492,10 +492,12 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   to 191: the entry `vote(c)` stores one ballot for each identity (the
   registry image of the caller; identity 0 reverts). A second `vote`
   replaces the ballot, and `vote(0)` removes it. `cast(b1..bn)` stays a
-  view, and `amend()` takes no argument (181, 182). The tally is live:
-  WEIGHT[c] is the sum of the mass of the identities with the ballot c.
-  `transfer`, `transferFrom` and `recover` move the vote with the mass, so
-  there is no snapshot and there are no rounds (183). `amend()` gives the
+  view, and `amend()` takes no argument (181, 182). In O2 the tally is
+  live: WEIGHT[c] is the sum of the mass of the identities with the
+  ballot c. `transfer`, `transferFrom` and `recover` move the vote with
+  the mass, so there is no snapshot and there are no rounds (183). Since
+  O2b the tally is the tally of a round on the snapshot mass (see the end
+  of this item). `amend()` gives the
   n = `members` seats by the largest remainder (ties go to the lower code)
   and reads the verdict table. The table, KL1 and the differential vectors
   do not change (184). There is no quorum: `amend()` reverts when the
@@ -513,8 +515,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   (`examples/arrow-debreu.lang`, `examples/erc721-dirac.lang`), B2 the
   core split of the verdict read (`asm_verdict`), B3 the contract
   (`vote`, `amend()`, BALLOT, WEIGHT and the move of the vote), B4 the
-  claims vote run and the vote law calls. Open: rounds, a snapshot and a
-  quorum (O2b, not planned).
+  claims vote run and the vote law calls. O2b RULED 2026-10-11 (USER, MY
+  CALLs 237 to 246 (a)) and built in B1 to B4 (build calls 254 (a), 255
+  (a), 256 (a), 257 (a)): the tally is the tally of a round on the
+  snapshot mass (SNAP slot 18, the lazy copy at the round start). A
+  successful `amend()` ends the round: WEIGHT := 0, ROUND (slot 17) :=
+  ROUND + 1, and the BALLOT tag makes the old ballots no ballots.
+  `amend()` reverts at W < q (def `quorum`; when it is absent, q = 1).
+  `transferKeepsTally` is the vote law (241 (a) supersedes 183 (a)), and
+  the image law stays as a fact. O2b logs no event (244).
 - O3. The forced recovery entry (ERC-1644) and its authorization object.
   RULED 2026-10-08 (USER): the issuer table of the active charter (the
   table that gates `attest`) authorizes `recover`. There is no new storage,
@@ -598,6 +607,7 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 | M1 | I3: the contract entries of section 7 in `domain/entries.c`; the genesis writes of the creation code | done 2026-10-08 |
 | M2 | I4: the reference model `test/claims.py`; the differential test against geth on operation sequences; law vectors: conservation, sum to inflow, transfer then distribute equals distribute on the image, `amend` moves neither `mu` nor the treasury, impossibility reverts leave the state unchanged, R rejections revert | done 2026-10-08 |
 | M3 | I5: examples (a Debreu charter vote, a labelled-constitution impossibility, an ERC-721 Dirac measure with `S = 1`); `docs/STATUS.md`, `docs/VALIDATION.md`, `README.md`; the final gate | done 2026-10-08 |
+| O2b | Rounds: the tally of a round on the snapshot mass, the round end in `amend()` and the quorum (MY CALLs 237 to 246 (a)); builds B1 to B4 | done 2026-10-11 |
 
 Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 `bin/new-lang.sh` (with the tcc-evm-dao host added) generated this tree from

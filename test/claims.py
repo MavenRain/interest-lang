@@ -719,7 +719,11 @@ VOTE_CHOICES = (('vote',) * 6 + ('amend',) * 3 + ('transfer',) * 3 + ('erc20Tran
                 + ('transferFrom',) * 3 + ('recover',) * 2 + ('attest',) + VIEWS
                 + ('transferByPartition',) * 3 + ('recoverByPartition',) * 2 + PARTITION_VIEWS)
 VOTE_SEEDS, VOTE_LENGTH = range(301, 311), 30
-COVER_VOTE = {'vote-mass', 'vote0', 'amend+', 'weight-moves'}
+# O2b (B4): vote-moved-mass and late-mass are votes by an identity that sent or received mass after
+# the round start; vote-old-ballot is a vote whose ballot is of an old round (no debit). A second vote
+# in a round after an amend (the debit path at ROUND > 0) is a fixed call in round_laws (MY CALL 257
+# (a)): the vote seeds miss it.
+COVER_VOTE = {'vote-mass', 'vote0', 'amend+', 'weight-moves', 'vote-moved-mass', 'late-mass', 'vote-old-ballot'}
 
 
 def random_call(rng, args, payable=True, choices=CHOICES):
@@ -756,6 +760,12 @@ def sequence(program, runtime, seed, length, args, choices=CHOICES):
             seen.add('vote-mass')
         if call[0] != 'vote' and model and tally(storage(model[0])) != tally(storage(s)):
             seen.add('weight-moves')
+        if call[0] == 'vote' and model and call[1][0]:
+            voter, t = identity(s, call[2]), s.round + 1
+            snap, ballot, mu = s.snap.get(voter, 0), s.ballot.get(voter, 0), s.mu.get(voter, 0)
+            seen |= {name for name, hit in (('vote-moved-mass', snap // TAG == t and snap % TAG > mu),
+                                            ('late-mass', snap // TAG == t and snap % TAG < mu),
+                                            ('vote-old-ballot', ballot // TAG not in (0, t))) if hit}
         pairs |= drawn_pair(s, call)
         deposits += (call[1][1] if program.token else call[3]) if model and call[0] == 'deposit' else 0
         paid += model[1] if model and call[0] == 'withdraw' else 0
@@ -889,7 +899,10 @@ def amend_law(program, runtime):
     """At a rich state, identity 1 (mass 3) votes b1 and identity 2 (mass 7) votes b2, for each
     (b1, b2); then amend() changes storage only at CHARTER, ROUND and WEIGHT (O2b: the next round), the wei stays,
     and the charter is the verdict of the seats of the image of the snapshot mass along the
-    ballots (O2b: the votes weigh the masses at the start of the round, MY CALL 254 (a))."""
+    ballots (O2b: the votes weigh the masses at the start of the round, MY CALL 254 (a)). The
+    reset (O2b B4): WEIGHT[1 .. 3] = 0, ROUND is the old ROUND + 1, and each ballot of the old
+    round is no ballot. After a revert (identity 1 alone, W = 5 < q = 6), no slot and no wei
+    changes."""
     base, count = rich_debreu(program), 0
     reset = {CHARTER, ROUND, *(slot(WEIGHT, c) for c in (1, 2, 3))}
     rest = lambda words: {key: value for key, value in words.items() if key not in reset}
@@ -898,12 +911,19 @@ def amend_law(program, runtime):
         for h, (b, sender) in enumerate(zip(ballots, (wallet(4096), wallet(4097))), 1):
             s, chain = check_step(f'{label}-vote-{h}', program, runtime, s, chain, ('vote', (b,), sender, 0))
         after, moved = check_step(label, program, runtime, s, chain, ('amend', (), SENDER, 0))
-        held = seats(image(chain[0]))
+        held, t = seats(image(chain[0])), chain[0].get(ROUND, 0) + 1
         require(rest(moved[0]) == rest(chain[0]) and moved[1] == chain[1]
                 and after.charter == verdict(program, tuple(c for c, n in zip((1, 2, 3), held) for _ in range(n))),
                 f'law-amend {ballots}: amend moved a word other than the charter, ROUND and WEIGHT')
+        require(tally(moved[0]) == {} and moved[0].get(ROUND, 0) == t and image(moved[0]) == {}
+                and all(current(moved[0].get(slot(BALLOT, h), 0), t + 1, 0) == 0 for h in IDENTITIES),
+                f'law-amend-reset {ballots}: WEIGHT {tally(moved[0])}, ROUND {moved[0].get(ROUND, 0)} != {t}, '
+                f'or a ballot of round {t} is a ballot of round {t + 1}')
         count += 1
-    return count
+    s, chain = check_step('law-amend-below-vote', program, runtime, base, at(base), ('vote', (1,), wallet(4096), 0))
+    kept = check_step('law-amend-below', program, runtime, s, chain, ('amend', (), SENDER, 0))[1]
+    require(kept[:2] == chain[:2], 'law-amend-below: a reverted amend() changed a slot or the wei')
+    return count + 1
 
 
 def recover_law(program, runtime):
@@ -1034,18 +1054,28 @@ def allowance_laws(program, runtime):
     return 3 * len(vectors)
 
 
+def weigh(*pairs):
+    """The tally of the votes PAIRS = (code, mass): {c: the sum of the masses with code c}; code 0
+    and a zero sum left out (O2b)."""
+    sums = {c: sum(n for d, n in pairs if d == c) for c, _ in pairs if c}
+    return {c: w for c, w in sums.items() if w}
+
+
 def vote_laws(program, runtime):
     """The vote laws on the geth state (MY CALL 188), from rich_debreu (identity 1 is the issuer
     with mass 3, identity 2 has mass 7, charter open). A vote weighs the mass at the start of the
     round (O2b): rich_debreu moves 2 units in round 1, so the round-start masses n1 and n2 are the
     genesis masses. recastMoves: identity 1 votes b, then b2; each vote changes only the ballot of
-    1 and WEIGHT, and the tally is n1 at the code (vote(0) withdraws). transferMovesVote: after
-    each of the 4 moves the tally is the image of the snapshot mass along the ballots.
+    1 and WEIGHT, and the tally is n1 at the code (vote(0) withdraws). transferKeepsTally (MY CALL
+    241 (a)): each of the 4 moves keeps the tally, and the tally weighs g1 and g2, the genesis
+    masses (the masses at the start of round 1); transferMovesVote stays as an image fact: after
+    the move the tally is the image of the snapshot mass along the ballots.
     noDoubleVote: 1 votes c, moves 2 to identity 2, 2 votes c2: the tally sums to n1 + n2 (the
     moved mass votes once); then amend() gives the verdict of the seats of the geth tally, and the
     seats sum to 3 with floor <= seat <= ceil of 3 w / W. -> the number of law vectors."""
     one, two, base = wallet(4096), wallet(4097), rich_debreu(program)
     (n1, n2), start = (current(base.snap.get(h, 0), base.round + 1, base.mu.get(h, 0)) for h in (1, 2)), at(base)
+    g1, g2 = (genesis(program).mu.get(h, 0) for h in (1, 2))
     keys = {slot(BALLOT, 1)} | {slot(WEIGHT, c) for c in (1, 2, 3)}
     for b, b2 in itertools.product((1, 2, 3), (0, 1, 2, 3)):
         label = f'law-vote-recast-{b}{b2}'
@@ -1064,8 +1094,11 @@ def vote_laws(program, runtime):
         for number, call in enumerate((('vote', (c1,), one, 0), ('vote', (c2,), two, 0)) + setup):
             s, chain = check_step(f'{label}-{number}', program, runtime, s, chain, call)
         moved, after = check_step(label, program, runtime, s, chain, move)
-        require(moved.mu != s.mu and tally(after[0]) == image(after[0]),
-                f'{label}: the move reverts, or WEIGHT {tally(after[0])} is not the image {image(after[0])}')
+        require(moved.mu != s.mu and tally(after[0]) == tally(chain[0]) == weigh((c1, g1), (c2, g2)),
+                f'{label}: the move reverts, or the tally {tally(chain[0])} -> {tally(after[0])} is not the tally '
+                f'{weigh((c1, g1), (c2, g2))} of the round-start masses (transferKeepsTally)')
+        require(tally(after[0]) == image(after[0]),
+                f'{label}: WEIGHT {tally(after[0])} is not the image {image(after[0])}')
     for c, c2 in itertools.product((1, 2, 3), repeat=2):
         label, s, chain = f'law-vote-once-{c}{c2}', base, start
         for number, call in enumerate((('vote', (c,), one, 0), ('transfer', (2, 2), one, 0), ('vote', (c2,), two, 0))):
@@ -1078,6 +1111,41 @@ def vote_laws(program, runtime):
                 and after.charter == verdict(program, tuple(j for j, n in zip((1, 2, 3), held) for _ in range(n))),
                 f'{label}: the tally {w} counts the moved mass twice, or the seats {held} fail')
     return 12 + 3 * len(moves) + 9
+
+
+def round_laws(program, runtime):
+    """The round laws on the geth state (O2b, MY CALLs 241, 242 and 245 (a)), from rich_debreu
+    (round 1; identity 1 moved 2 units to identity 2 after the round start, so g1 and g2, the
+    genesis masses, are the round-start masses). For each (c, c2): 2 votes c and 1 votes c2: the
+    tally weighs g2 and g1 (lateMassNoVote: the 2 units that 2 received do not vote; the moved
+    mass of 1 votes). Both vote 1 and amend() closes round 1 (amendR): WEIGHT = 0, ROUND = 1, and
+    no ballot of round 1 is a ballot of round 2. In round 2, 1 moves 2 units to 2, 1 votes c and
+    2 votes c2 (voteR): the ballots of round 1 do not count, and the tally weighs m1 and m2, the
+    masses at the start of round 2. 1 votes c2 again (MY CALL 257 (a): a second vote in round 2
+    debits its ballot of round 2): the tally weighs m1 and m2 at c2. amend() closes round 2. -> the
+    number of law vectors."""
+    one, two, base = wallet(4096), wallet(4097), rich_debreu(program)
+    g1, g2 = (genesis(program).mu.get(h, 0) for h in (1, 2))
+    m1, m2 = (base.mu.get(h, 0) for h in (1, 2))
+    closed = lambda words, r: (tally(words) == {} and words.get(ROUND, 0) == r and image(words) == {}
+                               and all(current(words.get(slot(BALLOT, h), 0), r + 1, 0) == 0 for h in IDENTITIES))
+    for c, c2 in itertools.product((1, 2, 3), repeat=2):
+        label, s, chain, words = f'law-round-{c}{c2}', base, at(base), ()
+        for number, call in enumerate((('vote', (c,), two, 0), ('vote', (c2,), one, 0), ('vote', (1,), one, 0),
+                                       ('vote', (1,), two, 0), ('amend', (), SENDER, 0), ('transfer', (2, 2), one, 0),
+                                       ('vote', (c,), one, 0), ('vote', (c2,), two, 0), ('vote', (c2,), one, 0),
+                                       ('amend', (), SENDER, 0))):
+            s, chain = check_step(f'{label}-{number}', program, runtime, s, chain, call)
+            words = words + (chain[0],)
+        require(tally(words[1]) == weigh((c, g2), (c2, g1)),
+                f'{label}: the tally {tally(words[1])} of round 1 does not weigh the round-start masses (lateMassNoVote)')
+        require(closed(words[4], 1) and closed(words[9], 2),
+                f'{label}: amend() does not reset WEIGHT, add 1 to ROUND and end the ballots of the round (amendR)')
+        require(words[5].get(slot(MU, 1), 0) == m1 - 2 and tally(words[6]) == {c: m1}
+                and tally(words[7]) == weigh((c, m1), (c2, m2)) and tally(words[8]) == weigh((c2, m1), (c2, m2)),
+                f'{label}: the tally {tally(words[6])}, {tally(words[7])}, {tally(words[8])} of round 2 does not weigh the '
+                f'masses at its start (voteR)')
+    return 9
 
 
 def dirac_dictator(program, runtime):
@@ -1271,7 +1339,7 @@ def main():
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
             + r_rejections(*debreu) + dust_recycle(*debreu) + dirac_vectors(*erc721)
-            + vote_laws(program, runtime) + dirac_dictator(*erc721) + nft_laws(*erc721))
+            + vote_laws(program, runtime) + round_laws(program, runtime) + dirac_dictator(*erc721) + nft_laws(*erc721))
     contract = (withdraw_moves_dust(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))

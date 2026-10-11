@@ -118,8 +118,10 @@ milestone of SPEC section 10 is open.
   pays it out, so the solvency law holds with `>=`.
 - Genesis wallets and identities are below 2^64, because `Nat` in the
   checker is a 64-bit word (KL4).
-- The weighted tally is live: a transfer moves the vote with the mass.
-  There are no rounds, no snapshot and no quorum (SPEC O2).
+- The weighted tally is the tally of a round on the snapshot mass: a
+  vote weighs the mass at the round start, and a transfer does not
+  change the tally. A successful `amend()` ends the round. `amend()`
+  reverts when the tally sum is less than the quorum (SPEC O2, O2b).
 - `amend()` decides on n = `members` seats: the largest remainder rounds
   the weighted tally, and ties go to the lower code.
 - A move without a partition word (`transfer`, the ERC-20 `transfer`,

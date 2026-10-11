@@ -9,7 +9,9 @@ start charter, the genesis units of each identity in each partition
 charter and partition, the payout waterfall W of each charter, and the
 trusted issuers. The compiler `interestc` checks the program, gives the verdict
 table of the constitution and writes the EVM contract. The language comes
-from lang-template (commit `1aa27ae`) with the tcc-evm-dao host.
+from lang-template (commit `1aa27ae`) with the tcc-evm-dao host. The
+vote is per round: a vote weighs the mass of the identity at the round
+start, and a successful `amend()` ends the round (SPEC section 9, O2b).
 
 ## Build and test
 
