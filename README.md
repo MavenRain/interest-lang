@@ -13,6 +13,10 @@ from lang-template (commit `1aa27ae`) with the tcc-evm-dao host. The
 vote is per round: a vote weighs the mass of the identity at the round
 start, and a successful `amend()` ends the round (SPEC section 9, O2b).
 
+Status: interest-lang is closed at O2b (C1, 2026-10-11). No work is
+planned. `docs/STATUS.md` gives the status and the known limits, and
+`docs/KIT-DEBT.md` stays the record of the differences from the kit.
+
 ## Build and test
 
 ```sh

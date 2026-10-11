@@ -5,7 +5,9 @@ The build implements milestones M0 to M3 of `SPEC.md` (slices I1 to I5,
 constitution, gives its program data and writes an EVM contract with the
 entries of SPEC section 7. The reference model `test/claims.py` agrees with
 geth on operation sequences and on the law vectors of milestone M2. No
-milestone of SPEC section 10 is open.
+milestone of SPEC section 10 is open. C1 (2026-10-11, USER) closed
+interest-lang at O2b: no work is planned, and `docs/KIT-DEBT.md` stays
+the record of the differences from the kit.
 
 ## Implemented
 
@@ -77,6 +79,13 @@ milestone of SPEC section 10 is open.
    "Differences that remain"). The program data uses the kit hooks
    `lang_domain_read` and `lang_domain_print`, and a failed stdout write
    gives `IO_WRITE` (slice I6).
+4. Not planned (closed) at C1 (2026-10-11, USER): G1 (the intrinsic gas
+   of the tests stays a known limit, see below), K6 (the sync of
+   `docs/KIT-DEBT.md` items 12, 13, 15 and 16 to lang-template; these
+   items stay the record), O1 (a Lean proof of the facts of SPEC
+   section 4.1), O4b and O4c (the vote and the payouts by partition),
+   O5e (ERC-721 with S > 1) and O5f (ERC-721 metadata). SPEC section 9
+   gives each item.
 
 ## Known limits
 
@@ -104,7 +113,8 @@ milestone of SPEC section 10 is open.
 - The gate measures only the execution gas of the settlement calls: geth
   `evm run` does not charge the intrinsic gas of a transaction, and
   `test/claims.py` has no gas check. Each settlement call must not use more
-  gas than its line in `test/gas-baseline.txt`.
+  gas than its line in `test/gas-baseline.txt` (G1: not planned
+  (closed)).
 - The account of the ERC-20 facade is the identity: every `address`
   argument is an identity word below 2^160, so a wallet reads its mass and
   gives an allowance at the address of its identity. `approve` sets the
@@ -130,7 +140,7 @@ milestone of SPEC section 10 is open.
 - The contract has no `partitionsOf`, `canTransferByPartition`, operators,
   documents or issuance of ERC-1400 (O4).
 - The vote and the payouts read the total mass MU[h], not the mass of one
-  partition (SPEC O4b and O4c, not planned).
+  partition (SPEC O4b and O4c, not planned (closed)).
 
 ## Internal boundaries
 

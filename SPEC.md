@@ -486,7 +486,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 
 ## 9. Open items
 
+C1 (2026-10-11, USER): interest-lang is closed at O2b. Each item below
+is RULED, or it is not planned (closed). The post-O5d rows G1 and K6 are
+also not planned (closed): G1 (the intrinsic gas of the tests) stays a
+known limit of `docs/STATUS.md`, and K6 (the sync of `docs/KIT-DEBT.md`
+items 12, 13, 15 and 16 to lang-template) does not occur, so
+`docs/KIT-DEBT.md` stays the record of these items.
+
 - O1. A Lean proof of the discrete-D facts of section 4.1 (escrow-lang O1).
+  Not planned (closed) 2026-10-11 (USER, C1).
 - O2. Ballot authentication and tallies weighted by `mu`. escrow-lang has one
   unweighted ballot for each member. RULED 2026-10-09 (USER), MY CALLs 181
   to 191: the entry `vote(c)` stores one ballot for each identity (the
@@ -543,8 +551,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `recoverByPartition`), and B4 8 mutants by hand and the docs. The
   ERC-721 shape is an example program with `S = 1` (a Dirac measure);
   O5d gives it the ERC-721 ABI.
-  Open: votes by partition (O4b) and payouts by partition (O4c). They are
-  not planned.
+  Votes by partition (O4b) and payouts by partition (O4c) are not planned
+  (closed) 2026-10-11 (USER, C1).
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events. O5a (2026-10-09): the read facade and the `Transfer`
   event. O5b (2026-10-09): the ERC-20 asset carrier (R3 re-ruled,
@@ -555,6 +563,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `debreu_erc721` (OWNER, APPROVED, OPERATOR and the LOG4 `Transfer`), B3
   the two `safeTransferFrom` forms and the `onERC721Received` check, and
   B4 the claims 721 model, its law calls and 8 mutants by hand.
+  O5e (ERC-721 with S > 1: the token ids 1 to S) and O5f (ERC-721
+  metadata: `tokenURI`) are not planned (closed) 2026-10-11 (USER, C1).
 - O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
   program gives the genesis charter, and it can be any declared charter.
   `examples/arrow-debreu.lang` has `start restricted`, the second declared
@@ -573,8 +583,9 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `ChoiceRule` of `domain/domain.lang`. RULED 2026-10-08 (USER): the enums
   are in `domain/domain.lang`. The decision codes of `Charter` are in
   declaration order. A program gives the R, W and issuer tables of each
-  charter as definitions with fixed names, the same way as `members` (not
-  ruled). RULED 2026-10-08 (USER): the constructors are `Juris` =
+  charter as definitions with fixed names, the same way as `members`
+  (RULED as built 2026-10-11, USER, C1). RULED 2026-10-08 (USER): the
+  constructors are `Juris` =
   `domestic`, `foreign`; `Status` = `retail`, `accredited`; `Charter` =
   `open`, `restricted`, `frozen` (codes 1, 2, 3). Thus M0 has k = 3.
   Slice I2a declared `Juris` and `Status` in `domain/domain.lang`
@@ -608,6 +619,7 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
 | M2 | I4: the reference model `test/claims.py`; the differential test against geth on operation sequences; law vectors: conservation, sum to inflow, transfer then distribute equals distribute on the image, `amend` moves neither `mu` nor the treasury, impossibility reverts leave the state unchanged, R rejections revert | done 2026-10-08 |
 | M3 | I5: examples (a Debreu charter vote, a labelled-constitution impossibility, an ERC-721 Dirac measure with `S = 1`); `docs/STATUS.md`, `docs/VALIDATION.md`, `README.md`; the final gate | done 2026-10-08 |
 | O2b | Rounds: the tally of a round on the snapshot mass, the round end in `amend()` and the quorum (MY CALLs 237 to 246 (a)); builds B1 to B4 | done 2026-10-11 |
+| C1 | The close at O2b: section 9 marks G1, K6, O1, O4b, O4c, O5e and O5f not planned (closed), and the O9 clause on the fixed definition names RULED as built; `docs/KIT-DEBT.md` stays the record of the differences from the kit | done 2026-10-11 (closed) |
 
 Status 2026-10-08: I1 to I5 done, so M0 to M3 are done. lang-template
 `bin/new-lang.sh` (with the tcc-evm-dao host added) generated this tree from
@@ -651,4 +663,5 @@ is the first commit of
 this tree. I6 removed the two differences from the kit that
 `docs/KIT-DEBT.md` records: the program data uses the kit hooks
 `lang_domain_read` and `lang_domain_print`, and a failed write to stdout
-gives `IO_WRITE`. The open work is in `docs/STATUS.md`.
+gives `IO_WRITE`. C1 (2026-10-11) closed interest-lang at O2b, so no
+work is open (`docs/STATUS.md`).
