@@ -211,8 +211,8 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `attest I G P c w h p s` | `Option (prod (Registry, Profiles))` | a registry write by `c`, a trusted issuer (`I`) of the active charter, when `h > 0`: the registry maps `w` to `h`, and the profile of `h` becomes `p`. The state does not change. `none` otherwise (ruled 2026-10-08; `h > 0`: MY CALL 162 (b), O5b) |
 | `cast`, `castOrbit`, `homAmend`, `reconstitute`, `canonical` | escrow-lang types | escrow-lang `SPEC.md` section 5, without change |
 | `amend F L x s` | `InterestState` | active charter := `gov F L x`. It does not move `mu` or the treasury. Law: `mass` and `Treasury` do not change (a checked equality) |
-| `vote h c V` | `Votes` | O2. `Votes := Identity -> Option Ballot`: `none` (EVM code 0) is no ballot. `vote` sets the ballot of `h` to `c`, and no other ballot changes. A second vote replaces the first, and `none` withdraws it. The state does not change. `wtally m V xs` is the image of `m` along the ballots of the listed identities `xs` (`Voters`), counting each identity once even when it is repeated. Laws: `tallyMass`, `repeatedVoters`, `recastMoves`, `transferMovesVote`, `noDoubleVote` |
-| `amendW F L V xs s e` | `InterestState` | O2. W is the total of `wtally mu V xs`. When W is not 0, active charter := `rule F L` of the tally `seats members (wtally mu V xs)`. When W = 0, `s` does not change (no quorum). `e` proves that `seatTally members (wtally mu V xs)` has `members` seats (by evaluation, as for `Config`); `seatTally` pads W = 0 with `(members, 0, 0)` solely for this proof, while `seats` gives `(0, 0, 0)`. It does not move `mu` or the treasury. Laws: `seatsTotal`, `seatsQuota`, `amendWeighted`, `repeatedVotersAmend`, `amendKeeps`, `amendEmpty`, `diracDictator` |
+| `vote h c V` | `Votes` | O2. `Votes := Identity -> Option Ballot`: `none` (EVM code 0) is no ballot. `vote` sets the ballot of `h` to `c`, and no other ballot changes. A second vote replaces the first, and `none` withdraws it. The state does not change. `wtally m V xs` is the image of `m` along the ballots of the listed identities `xs` (`Voters`), counting each identity once even when it is repeated. Laws: `tallyMass`, `repeatedVoters`, `recastMoves`. Image facts on the live measure: `transferMovesVote`, `noDoubleVote` |
+| `amendR F L q r xs s e` | `prod (InterestState, Round)` | O2b. `Round := prod (Measure, Votes)`: the snapshot measure and the ballots of a round. `openRound s` is `(bookTotal s.0, noVotes)`: the snapshot at `s` and no ballots. `voteR h c r` is `vote h c` on the ballots of `r`, and the snapshot does not change. W is the total of `wtally r.0 r.1 xs`. When W >= q and W >= 1, active charter := `rule F L` of the tally `seats members (wtally r.0 r.1 xs)`, and the round ends: the result is the new state and `openRound` of the new state. Else `s` and `r` do not change. `e` proves that `seatTally members (wtally r.0 r.1 xs)` has `members` seats (by evaluation, as for `Config`); `seatTally` pads W = 0 with `(members, 0, 0)` solely for this proof, while `seats` gives `(0, 0, 0)`. It does not move `mu` or the treasury. `amendR` replaces the O2 function `amendW` (the live measure and no quorum); `amendW` stays in the prelude until O2b B4. Laws: `seatsTotal`, `seatsQuota`, `amendWeighted`, `repeatedVotersAmend`, `amendKeeps`, `amendEmpty`, `quorumBlocks`, `quorumMet`, `roundResets`, `transferKeepsTally`, `lateMassNoVote`, `noDoubleVoteRound`, `diracDictator`, `diracQuorum` |
 | `recover I c h k q s` | `Option InterestState` | ERC-1644 forced recovery (O3): `recoverIn I classA c h k q s` (O4), with `k > 0` and `q <= mass (s.0 classA) h`. R does not gate it, and it does not quotient through the voter orbit. Laws: conservation of supply; the claim of each identity and `Treasury` do not change (a checked equality). Arrow-Debreu only |
 | `recoverIn I p c h k q s` | `Option InterestState` | O4. `recover` in partition p: `some` (the book with `debit h q ; credit k q` in partition p) if and only if `c` is a trusted issuer of the active charter, `k > 0` and `q <= mass (s.0 p) h`; otherwise `none`. R does not gate it. `recover I c h k q s` is `recoverIn I classA c h k q s` |
 
@@ -236,20 +236,31 @@ The allowance (O5c) is the prelude type `Allowance`.
 `transferFromAllowance`, `transferFromOver` and `transferFromRestricted`.
 A wrong value in a law gives TYPE_MISMATCH.
 
-The weighted vote (O2) is the prelude types `Votes` and `Voters` and the
-functions `wtally`, `seats`, `vote` and `amendW`. `examples/arrow-debreu.lang`
-checks its 11 laws as equalities (`EqNat`, `EqT3` and `EqDec`): `tallyMass`
+The weighted vote (O2) and its rounds (O2b) are the prelude types `Votes`,
+`Voters` and `Round` and the functions `wtally`, `seats`, `vote`,
+`openRound`, `voteR` and `amendR`. `examples/arrow-debreu.lang` checks its
+15 laws as equalities (`EqNat`, `EqT3` and `EqDec`): `tallyMass`
 (the tally total is the sum of the distinct balloted voter masses),
 `repeatedVoters` (repeating or reordering identities does not add weight),
 `seatsTotal` (the seats sum to `members` when W is not 0),
 `seatsQuota` (the largest remainder at (5, 0, 5) and
 (3, 0, 7)), `recastMoves` (a second vote and a withdraw),
-`transferMovesVote` (the image law: the vote moves with the mass),
-`noDoubleVote` (moved mass votes one time), `amendWeighted` (the seats
-(2, 0, 1) give `open`), `repeatedVotersAmend` (repeats do not change the
-amendment), `amendKeeps` (`mu` and the treasury do not change)
-and `amendEmpty` (no change at W = 0). `examples/erc721-dirac.lang` checks
-`diracDictator`: the one holder gets all the seats.
+`amendWeighted` (the seats (2, 0, 1) of a round give `open`),
+`repeatedVotersAmend` (repeats do not change the amendment), `amendKeeps`
+(`mu` and the treasury do not change), `amendEmpty` (no change at W = 0),
+`quorumBlocks` (W = 5 is below the quorum 6: the state and the round do
+not change), `quorumMet` (W = 10 meets the quorum: the charter is `open`),
+`roundResets` (the next round has no ballots, and its snapshot is the new
+state), `transferKeepsTally` (a transfer after the round start does not
+change the tally of the round), `lateMassNoVote` (mass that an identity
+receives after the round start does not vote) and `noDoubleVoteRound`
+(moved mass votes one time, at the ballot of its holder at the snapshot).
+It also checks 2 image facts on the live measure: `transferMovesVote` (in
+`wtally` of the live measure, the vote moves with the mass) and
+`noDoubleVote` (in that tally, moved mass counts one time).
+`examples/erc721-dirac.lang` checks `diracDictator` (the one holder gets
+all the seats) and `diracQuorum` (at q = 1 and S = 1 the holder alone ends
+the round).
 
 The ERC-721 approvals (O5d) are the prelude type `Nft`.
 `examples/erc721-dirac.lang` checks its 6 laws as equalities (`EqNat`):

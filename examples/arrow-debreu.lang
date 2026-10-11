@@ -243,28 +243,74 @@ def seatsQuota : prod (EqT3 (seats members wV) (tuple (2, tuple (0, 1))), EqT3 (
 def V1 : Votes := vote 1 (pureOption Ballot restricted) V0
 def recastMoves : prod (EqT3 (wtally mG V1 vs) (tuple (0, tuple (5, 5))), EqT3 (wtally mG (vote 1 (none Ballot) V1) vs) (tuple (0, tuple (0, 5)))) := tuple (reflT3 (tuple (0, tuple (5, 5))), reflT3 (tuple (0, tuple (0, 5))))
 
--- The image law: identity 1 moves 2 units to identity 2, and the 2 units
--- then vote frozen.
+-- An image fact on the live measure (MY CALL 241 (a)): identity 1 moves 2
+-- units to identity 2, and in `wtally` of the live measure the 2 units then
+-- vote frozen.  The vote law of a round is `transferKeepsTally` below.
 def sV : InterestState := tuple (bG, tuple (restricted, t0))
 def eV : Le 2 (mass (sV.0 classA) 1) := (3, reflNat 5)
 def transferMovesVote : EqT3 (wtally (bookTotal (stateOr sV (transfer restrict prof 1 2 2 sV eV)).0) V0 vs) (tuple (3, tuple (0, 7))) := reflT3 (tuple (3, tuple (0, 7)))
 
--- No double vote: identity 1 votes open, moves its 5 units to identity 2
--- (the open charter admits them), and identity 2 votes frozen.  The tally
--- counts the 5 units one time, at frozen: the total is the mass of 1 and 2.
+-- No double vote, an image fact on the live measure: identity 1 votes
+-- open, moves its 5 units to identity 2 (the open charter admits them), and
+-- identity 2 votes frozen.  The live tally counts the 5 units one time, at
+-- frozen: the total is the mass of 1 and 2.  The law of a round is
+-- `noDoubleVoteRound` below.
 def sO : InterestState := tuple (bG, tuple (open, t0))
 def e5 : Le 5 (mass (sO.0 classA) 1) := (0, reflNat 5)
 def mN : Measure := bookTotal (stateOr sO (transfer restrict prof 1 2 5 sO e5)).0
 def noDoubleVote : prod (EqT3 (wtally mN V0 vs) (tuple (0, tuple (0, 10))), EqNat (total (wtally mN V0 vs)) (natAdd (mass mN 1) (mass mN 2))) := tuple (reflT3 (tuple (0, tuple (0, 10))), reflNat 10)
 
--- amendW: the seats (2, 0, 1) give `plural` = open.  The measure and the
--- treasury do not change.  With no votes (W = 0), the charter stays.
+-- Rounds and a quorum (O2b, MY CALLs 237 to 242 (a)).  `quorum` is an
+-- ordinary def in O2b B1.  One genesis identity holds 5 units, so two
+-- identities must vote.  `rV` opens a round at `sVD` with the ballots of
+-- V0.  amendR: W = 10 >= 6, the seats (2, 0, 1) give `plural` = open, and
+-- the round ends.  The measure and the treasury do not change.  With no
+-- ballots (W = 0), the charter stays.
+def quorum : Nat := 6
 def sVD : InterestState := deposit rent 7 sV
-def sA : InterestState := amendW F agg V0 vs sVD (reflNat 3)
+def rV : Round := voteR 2 (pureOption Ballot frozen) (voteR 1 (pureOption Ballot open) (openRound sVD))
+def rA : prod (InterestState, Round) := amendR F agg quorum rV vs sVD (reflNat 3)
+def sA : InterestState := rA.0
 def amendWeighted : EqDec sA.1.0 open := reflDec open
-def repeatedVotersAmend : EqDec (amendW F agg V0 (vcons 1 (vcons 2 (vcons 2 vnil))) sVD (reflNat 3)).1.0 open := reflDec open
+def repeatedVotersAmend : EqDec (amendR F agg quorum rV (vcons 1 (vcons 2 (vcons 2 vnil))) sVD (reflNat 3)).0.1.0 open := reflDec open
 def amendKeeps : prod (prod (EqNat (mass (bookTotal sA.0) 1) (mass (bookTotal sVD.0) 1), EqNat (mass (bookTotal sA.0) 2) (mass (bookTotal sVD.0) 2)), EqNat (sA.1.1.0 rent) (sVD.1.1.0 rent)) := tuple (tuple (reflNat 5, reflNat 5), reflNat 7)
-def amendEmpty : EqDec (amendW F agg noVotes vs sVD (reflNat 3)).1.0 restricted := reflDec restricted
+def amendEmpty : EqDec (amendR F agg quorum (openRound sVD) vs sVD (reflNat 3)).0.1.0 restricted := reflDec restricted
+
+-- quorumBlocks: only identity 1 votes, W = 5 < 6: the state and the round
+-- do not change.  quorumMet: with the ballots of V0, W = 10 and the charter
+-- is open.  roundResets: after quorumMet the round has no ballots, and its
+-- snapshot is the new state.
+def rQB : prod (InterestState, Round) := amendR F agg quorum (voteR 1 (pureOption Ballot open) (openRound sVD)) vs sVD (reflNat 3)
+def quorumBlocks : prod (EqDec rQB.0.1.0 restricted, EqT3 (wtally rQB.1.0 rQB.1.1 vs) (tuple (5, tuple (0, 0)))) := tuple (reflDec restricted, reflT3 (tuple (5, tuple (0, 0))))
+def quorumMet : prod (EqNat (total (wtally rV.0 rV.1 vs)) 10, EqDec sA.1.0 open) := tuple (reflNat 10, reflDec open)
+def roundResets : prod (EqT3 (wtally rA.1.0 rA.1.1 vs) (tuple (0, tuple (0, 0))), prod (EqNat (mass rA.1.0 1) (mass (bookTotal sA.0) 1), EqNat (mass rA.1.0 2) (mass (bookTotal sA.0) 2))) := tuple (reflT3 (tuple (0, tuple (0, 0))), tuple (reflNat 5, reflNat 5))
+
+-- transferKeepsTally: the round opens at sV with the ballots of V0, then
+-- identity 1 moves 2 units to identity 2.  The tally of the round is still
+-- (5, 0, 5): the snapshot does not move.  amendR on the new state gives the
+-- seats (2, 0, 1) and the charter open, and the next round takes its
+-- snapshot at the new state (3 and 7 units).
+def rT : Round := voteR 2 (pureOption Ballot frozen) (voteR 1 (pureOption Ballot open) (openRound sV))
+def sT : InterestState := stateOr sV (transfer restrict prof 1 2 2 sV eV)
+def aT : prod (InterestState, Round) := amendR F agg quorum rT vs sT (reflNat 3)
+def transferKeepsTally : prod (EqT3 (wtally rT.0 rT.1 vs) (tuple (5, tuple (0, 5))), prod (EqT3 (seats members (wtally rT.0 rT.1 vs)) (tuple (2, tuple (0, 1))), prod (EqDec aT.0.1.0 open, prod (EqNat (mass aT.1.0 1) 3, EqNat (mass aT.1.0 2) 7)))) := tuple (reflT3 (tuple (5, tuple (0, 5))), tuple (reflT3 (tuple (2, tuple (0, 1))), tuple (reflDec open, tuple (reflNat 3, reflNat 7))))
+
+-- lateMassNoVote: the round opens at sO, where identity 3 has 0 units.
+-- Identity 1 votes open, then moves its 5 units to identity 3, and
+-- identity 3 votes frozen.  Identity 3 holds 5 units in the new state, but
+-- its snapshot mass is 0: the tally of the round does not change.
+def sL : InterestState := stateOr sO (transfer restrict prof 1 3 5 sO e5)
+def rL : Round := voteR 1 (pureOption Ballot open) (openRound sO)
+def rL3 : Round := voteR 3 (pureOption Ballot frozen) rL
+def lateMassNoVote : prod (EqNat (mass (bookTotal sL.0) 3) 5, prod (EqT3 (wtally rL.0 rL.1 (vcons 1 (vcons 3 vnil))) (tuple (5, tuple (0, 0))), EqT3 (wtally rL3.0 rL3.1 (vcons 1 (vcons 3 vnil))) (tuple (5, tuple (0, 0))))) := tuple (reflNat 5, tuple (reflT3 (tuple (5, tuple (0, 0))), reflT3 (tuple (5, tuple (0, 0)))))
+
+-- noDoubleVoteRound: `noDoubleVote` on a round that opens at sO.  Identity
+-- 1 votes open, moves its 5 units to identity 2, and identity 2 votes
+-- frozen.  The tally of the round counts the 5 units one time, at open
+-- (the ballot of their holder at the snapshot): the total is the mass of 1
+-- and 2.
+def rN : Round := voteR 2 (pureOption Ballot frozen) (voteR 1 (pureOption Ballot open) (openRound sO))
+def noDoubleVoteRound : prod (EqT3 (wtally rN.0 rN.1 vs) (tuple (5, tuple (0, 5))), EqNat (total (wtally rN.0 rN.1 vs)) (natAdd (mass mN 1) (mass mN 2))) := tuple (reflT3 (tuple (5, tuple (0, 5))), reflNat 10)
 
 -- Partitions (O4, MY CALL 209 (a)).  `sP` holds the genesis book `bG` at
 -- the open charter, and `pA` gives each identity the profile domestic

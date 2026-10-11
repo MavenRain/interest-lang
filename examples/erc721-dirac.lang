@@ -71,6 +71,11 @@ def transferLeaves : EqNat (mass (s1.0 classA) 1) 0 := reflNat 0
 -- frozen and gets all `members` seats: a Dirac measure is a dictator.
 def diracDictator : EqT3 (seats members (wtally m1 (vote 1 (pureOption Ballot frozen) noVotes) (vcons 1 (vcons 2 vnil)))) (tuple (0, tuple (0, 3))) := reflT3 (tuple (0, tuple (0, 3)))
 
+-- Rounds and a quorum (O2b): at q = 1 and S = 1 the holder alone ends the
+-- round.  The charter becomes frozen, and the next round has no ballots.
+def rQ : prod (InterestState, Round) := amendR F agg 1 (voteR 1 (pureOption Ballot frozen) (openRound s0)) (vcons 1 vnil) s0 (reflNat 3)
+def diracQuorum : prod (EqDec rQ.0.1.0 frozen, EqT3 (wtally rQ.1.0 rQ.1.1 (vcons 1 vnil)) (tuple (0, tuple (0, 0)))) := tuple (reflDec frozen, reflT3 (tuple (0, tuple (0, 0))))
+
 -- The restricted charter admits the transfer to identity 2 (accredited)
 -- and not the transfer to identity 3 (retail): the fallback s0 keeps the
 -- unit at identity 1.

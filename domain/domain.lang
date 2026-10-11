@@ -261,7 +261,8 @@ def seats : Nat -> T3 -> T3 := fun (n : Nat) (w : T3) =>
 
 -- `seatTally n w` is `seats n w` when W is not 0, else (n, 0, 0).  Thus
 -- its total is n at each `w`, and a program can give the `Tally` proof by
--- evaluation also at W = 0.  `amendW` reads it only when W is not 0.
+-- evaluation also at W = 0.  `amendW` and `amendR` read it only when W is
+-- not 0.
 def seatTally : Nat -> T3 -> T3 := fun (n : Nat) (w : T3) =>
   case natEq (total w) 0 with
   | 0 (u : prod ()) => seats n w
@@ -716,12 +717,49 @@ def amendState : (F : ChoiceRule) -> Aggregation F -> Config -> InterestState ->
 -- L` of the `members` seats of `wtally (bookTotal s.0) V xs`.  When W = 0,
 -- s does not change (no quorum, MY CALL 185 (a)).  `e` is the proof that
 -- the seat tally has `members` seats: a program gives it by evaluation, as
--- for `Config`.  The book and the treasury do not change.
-def amendW : (F : ChoiceRule) -> (L : Aggregation F) -> (V : Votes) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally (bookTotal s.0) V xs))) members -> InterestState :=
+-- for `Config`.  The book and the treasury do not change.  The programs
+-- use `amendR` (O2b, MY CALL 242 (a)); `amendW` stays for SPEC section 9
+-- and docs/VALIDATION.md until O2b B4 (MY CALL 247 (a)).
+def amendW: (F : ChoiceRule) -> (L : Aggregation F) -> (V : Votes) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally (bookTotal s.0) V xs))) members -> InterestState :=
   fun (F : ChoiceRule) (L : Aggregation F) (V : Votes) (xs : Voters) (s : InterestState) (e : EqNat (total (seatTally members (wtally (bookTotal s.0) V xs))) members) =>
     case natEq (total (wtally (bookTotal s.0) V xs)) 0 with
     | 0 (u : prod ()) => tuple (s.0, tuple (rule F L (mkTally (seatTally members (wtally (bookTotal s.0) V xs)) e), s.1.1))
     | 1 (u : prod ()) => s
+
+-- Rounds (O2b, MY CALLs 237 to 242 (a)).  A `Round` is the snapshot
+-- measure and the ballots of the round.  `openRound s` takes the snapshot
+-- `bookTotal s.0` and has no ballots.  `voteR h c r` is `vote` on the
+-- ballots of `r`; the snapshot does not change.  Thus a transfer after the
+-- round start does not move a vote, and mass that an identity receives
+-- after the round start does not vote.
+def Round : Type 0 := prod (Measure, Votes)
+
+def openRound : InterestState -> Round := fun (s : InterestState) =>
+  tuple (bookTotal s.0, noVotes)
+
+def voteR : Identity -> Option Ballot -> Round -> Round :=
+  fun (h : Identity) (c : Option Ballot) (r : Round) => tuple (r.0, vote h c r.1)
+
+-- `closeRound t` is the state `t` and the round `openRound t`: the next
+-- round takes its snapshot at `t` and has no ballots (MY CALL 248 (a)).
+def closeRound : InterestState -> prod (InterestState, Round) :=
+  fun (t : InterestState) => tuple (t, openRound t)
+
+-- `amendR F L q r xs s e` (O2b) is `amendW` on the round `r` with the
+-- quorum `q`.  W is the total of `wtally r.0 r.1 xs`: the snapshot mass of
+-- the ballots of the round.  When W >= q and W >= 1, the active charter
+-- becomes `rule F L` of the `members` seats of that tally, and the round
+-- ends: the result is `closeRound` of the new state.  Else the state and
+-- the round do not change.  `e` is as for `amendW`.  The book and the
+-- treasury do not change.
+def amendR : (F : ChoiceRule) -> (L : Aggregation F) -> (q : Nat) -> (r : Round) -> (xs : Voters) -> (s : InterestState) -> EqNat (total (seatTally members (wtally r.0 r.1 xs))) members -> prod (InterestState, Round) :=
+  fun (F : ChoiceRule) (L : Aggregation F) (q : Nat) (r : Round) (xs : Voters) (s : InterestState) (e : EqNat (total (seatTally members (wtally r.0 r.1 xs))) members) =>
+    case natLt (total (wtally r.0 r.1 xs)) q with
+    | 0 (u : prod ()) =>
+      (case natEq (total (wtally r.0 r.1 xs)) 0 with
+       | 0 (v : prod ()) => closeRound (tuple (s.0, tuple (rule F L (mkTally (seatTally members (wtally r.0 r.1 xs)) e), s.1.1)))
+       | 1 (v : prod ()) => tuple (s, r))
+    | 1 (u : prod ()) => tuple (s, r)
 
 -- `recycle h S s` (O11): the claim of `h` becomes 0 and its remainder
 -- `natMod (num s h) S` goes to the dust; the whole wei of the dust go to
