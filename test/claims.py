@@ -74,6 +74,15 @@ NFT_FACADE = ('ownerOf(uint256)', 'approve(address,uint256)', 'getApproved(uint2
               'isApprovedForAll(address,address)', 'transferFrom(address,address,uint256)', 'supportsInterface(bytes4)',
               'safeTransferFrom(address,address,uint256)', 'safeTransferFrom(address,address,uint256,bytes)',
               'name()', 'symbol()')
+# The model entries of the erc721 facade that the ERC-20 facade does not have (O5d B4), and their
+# signatures. approve and transferFrom have the ERC-20 selectors; safeTransferFromBytes is the
+# bytes form of safeTransferFrom.
+NFT_SIGNATURES = dict(ownerOf='ownerOf(uint256)', getApproved='getApproved(uint256)',
+                      setApprovalForAll='setApprovalForAll(address,bool)',
+                      isApprovedForAll='isApprovedForAll(address,address)', supportsInterface='supportsInterface(bytes4)',
+                      safeTransferFrom='safeTransferFrom(address,address,uint256)',
+                      safeTransferFromBytes='safeTransferFrom(address,address,uint256,bytes)')
+NFT_ENTRIES = ('approve', 'transferFrom') + tuple(NFT_SIGNATURES)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -137,7 +146,7 @@ IMPOSSIBILITY = Program(
 # erc721 (O5d B1, MY CALL 224); the code data gives the ERC-721 table (O5d B2).
 ERC721 = Program(
     'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1, 1), (4097, 2, 3, 0, 1), (4098, 3, 0, 0, 1)),
-    (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1,
+    (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries + NFT_ENTRIES, 1,
     facade=True)
 # examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b), and no
 # `name` or `symbol` def (the defaults, O5c), and every wallet in partition 1.
@@ -158,7 +167,7 @@ class State:
     identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2).
     PART maps a (partition, identity) pair to its units (O4); the moves use CLASS_A. OWNER and
     APPROVED are the words of the erc721 facade (O5d B2): the identity of the one unit and the
-    approved identity."""
+    approved identity. OPERATOR maps an (owner, operator) identity pair to 0 or 1 (O5d B4)."""
     mu: dict
     registry: dict
     profile: dict
@@ -177,6 +186,7 @@ class State:
     part: dict = dataclasses.field(default_factory=dict)
     owner: int = 0
     approved: int = 0
+    operator: dict = dataclasses.field(default_factory=dict)
 
 
 # The partition of the moves and of recover (O4 B2: PART_DEFAULT of domain/entries.c), and
@@ -212,7 +222,8 @@ def storage(s):
              **{allowance_word(o, p): v for (o, p), v in s.allowance.items()},
              **{slot(BALLOT, h): c for h, c in s.ballot.items()},
              **{slot(WEIGHT, c): w for c, w in s.weight.items()},
-             **{st.parted(p, h): u for (p, h), u in s.part.items()}}
+             **{st.parted(p, h): u for (p, h), u in s.part.items()},
+             **{st.nested(st.OPERATOR, o, p): b for (o, p), b in s.operator.items()}}
     return {key: value for key, value in words.items() if value}
 
 
@@ -353,6 +364,64 @@ def allowance_view(program, s, sender, value, o, p):
     return None if max(o, p) >= 2**160 else (s, s.allowance.get((o, p), 0))
 
 
+def owner_of(program, s, sender, value, k):
+    """ownerOf(id) of the erc721 facade (O5d B4): an id other than TOKEN_ID reverts; else OWNER."""
+    return None if k != st.TOKEN_ID else (s, s.owner)
+
+
+def get_approved(program, s, sender, value, k):
+    """getApproved(id): an id other than TOKEN_ID reverts; else APPROVED."""
+    return None if k != st.TOKEN_ID else (s, s.approved)
+
+
+def may_move(s, p):
+    """mayMoveNft without the approved identity: P is OWNER or an operator of OWNER."""
+    return p == s.owner or s.operator.get((s.owner, p), 0) == 1
+
+
+def approve_nft(program, s, sender, value, to, k):
+    """approve(to, id) of the erc721 facade (O5d B4, MY CALL 217 (a), approveNft): an id other
+    than TOKEN_ID, to >= 2^160, or a caller that is not OWNER or an operator of OWNER reverts;
+    else APPROVED := to (to = 0 clears). The ERC-721 writes return no data (the result None)."""
+    p = identity(s, sender)
+    if k != st.TOKEN_ID or to >= 2**160 or p is None or not may_move(s, p):
+        return None
+    return dataclasses.replace(s, approved=to), None
+
+
+def set_approval_for_all(program, s, sender, value, op, b):
+    """setApprovalForAll(op, b) (setOperator): op = 0, op >= 2^160 or b > 1 reverts; else
+    OPERATOR[id(caller)][op] := b."""
+    h = identity(s, sender)
+    if h is None or op == 0 or op >= 2**160 or b > 1:
+        return None
+    return dataclasses.replace(s, operator={**s.operator, (h, op): b}), None
+
+
+def is_approved_for_all(program, s, sender, value, o, p):
+    """isApprovedForAll(owner, op): an argument >= 2^160 reverts; else OPERATOR[owner][op]."""
+    return None if max(o, p) >= 2**160 else (s, s.operator.get((o, p), 0))
+
+
+def transfer_nft(program, s, sender, value, h, to, k, *tail):
+    """transferFrom(from, to, id) of the erc721 facade and the 2 safeTransferFrom forms
+    (transferNft): an id other than TOKEN_ID, from or to >= 2^160, from not OWNER, or a caller
+    that is not APPROVED, OWNER or an operator of OWNER reverts; else the move of transfer by
+    from of the one unit (OWNER := to, APPROVED := 0). The identities of the claims runs have no
+    code, so the safe forms make no onERC721Received call; the law calls give a valid bytes tail."""
+    p = identity(s, sender)
+    if k != st.TOKEN_ID or max(h, to) >= 2**160 or h != s.owner or p is None:
+        return None
+    moved = send(program, s, h, to, 1) if p == s.approved or may_move(s, p) else None
+    return None if moved is None else (moved[0], None)
+
+
+def supports_interface(program, s, sender, value, word):
+    """supportsInterface(id) (ERC-165): a word with a nonzero byte after its 4 high bytes reverts;
+    else 1 for 0x01ffc9a7 and 0x80ac58cd, and 0 for all other ids."""
+    return None if word % 2**224 else (s, int(word >> 224 in (0x01ffc9a7, 0x80ac58cd)))
+
+
 def move(s, h, to, q, p=CLASS_A, facade=False):
     """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
     vote of q moves from the ballot of h to the ballot of to (O2); then the same debit and
@@ -463,6 +532,11 @@ OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=t
            approve=approve, transferFrom=transfer_from, allowance=allowance_view,
            transferByPartition=transfer_by_partition, recoverByPartition=recover_by_partition,
            **{name: view(name) for name in VIEWS + PARTITION_VIEWS})
+# The entries of the erc721 facade (O5d B4): approve and transferFrom are the ERC-721 forms.
+NFT_OPS = dict(OPS, approve=approve_nft, transferFrom=transfer_nft, safeTransferFrom=transfer_nft,
+               safeTransferFromBytes=transfer_nft, ownerOf=owner_of, getApproved=get_approved,
+               setApprovalForAll=set_approval_for_all, isApprovedForAll=is_approved_for_all,
+               supportsInterface=supports_interface)
 
 
 def apply(program, s, call):
@@ -470,7 +544,8 @@ def apply(program, s, call):
     name, args, sender, value = call
     if name not in program.entries or (value and (program.token or name != 'deposit')):
         return None
-    out = (pull if program.token and name == 'deposit' else OPS[name])(program, s, sender, value, *args)
+    ops = NFT_OPS if program.facade else OPS
+    out = (pull if program.token and name == 'deposit' else ops[name])(program, s, sender, value, *args)
     if out is None or not (program.token and name == 'withdraw'):
         return out
     w = slot(0, int(sender, 16))
@@ -482,7 +557,9 @@ def geth_step(label, runtime, chain, call):
     name, args, sender, value = call
     before, balance, *held = chain
     carrier = (st.TOKEN, st.token_code('standard'), held[0]) if held else None
-    return run(label, runtime, data(name, *args), before=before, value=value, sender=sender,
+    text = NFT_SIGNATURES.get(name)
+    calldata = (st.selector(name, len(args), text) + ''.join(f'{word:064x}' for word in args)) if text else data(name, *args)
+    return run(label, runtime, calldata, before=before, value=value, sender=sender,
                balance=0 if held else balance, token=carrier)
 
 
@@ -495,7 +572,7 @@ def check_step(label, program, runtime, s, chain, call):
     actual = geth_step(label, runtime, chain, call)
     wei = after.token is None
     wanted = dict(status='revert' if model is None else 'success',
-                  output='' if model is None else f'{result:064x}',
+                  output='' if model is None or result is None else f'{result:064x}',
                   storage=storage(after), receiver=after.balance if wei else 0,
                   sender=BASE + s.balance - after.balance if wei else BASE,
                   logs=records(program, s, call, model), token=holdings(after))
@@ -524,7 +601,8 @@ def records(program, s, call, model):
     TransferByPartition is logged also when the erc721 facade logs no Transfer (O5d B2)."""
     name, args, sender, value = call
     moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q),
-                 erc20Transfer=lambda to, q: (identity(s, sender), to, q), transferFrom=lambda h, to, q: (h, to, q))
+                 erc20Transfer=lambda to, q: (identity(s, sender), to, q), transferFrom=lambda h, to, q: (h, to, q),
+                 safeTransferFrom=lambda h, to, k: (h, to, k), safeTransferFromBytes=lambda h, to, k, *tail: (h, to, k))
     parted = dict(transferByPartition=lambda p, to, q, *tail: (p, sender, identity(s, sender), to, q),
                   recoverByPartition=lambda p, h, to, q: (p, sender, h, to, q))
     if model and name in moves:
@@ -533,7 +611,9 @@ def records(program, s, call, model):
         p, operator, h, to, q = parted[name](*args)
         return move_logs(program, h, to, q) + st.partition_logs(p, operator, h, to, q)[1:]
     if model and name == 'approve':
-        return [st.approval_log(identity(s, sender), *args)]
+        return [st.nft_log(s.owner, args[0], st.APPROVAL) if program.facade else st.approval_log(identity(s, sender), *args)]
+    if model and name == 'setApprovalForAll':
+        return [st.operator_log(identity(s, sender), *args)]
     if model and name == 'withdraw':
         h = identity(s, sender)
         paid, kept = divmod(settle(s, h).num[h], program.supply)
@@ -994,7 +1074,7 @@ def selector_checks(program, runtime, s):
     state does not change; each required call gives the model result."""
     table = selector_table(runtime)
     facade = NFT_FACADE if program.facade else (WRITE_FACADE if 'transfer' in program.entries else ()) + METADATA
-    wanted = ({st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
+    wanted = ({st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries if name not in NFT_ENTRIES}
               | {st.selector(signature.split('(')[0], 0, signature) for signature in facade})
     require(table == wanted, f'{program.name}: selector table {sorted(table)} != entries {sorted(wanted)}')
     # A FORBIDDEN signature of the Debreu write facade is an entry; table == wanted checks it.
@@ -1060,6 +1140,53 @@ def identity_boundaries(program, runtime):
     return len(calls)
 
 
+def nft_laws(program, runtime):
+    """The 6 laws of examples/erc721-dirac.lang (O5d B1, MY CALL 220 (a)) as calls on the geth
+    state (O5d B4), each vector from the erc721 genesis (identity 1 holds the unit; the wallets
+    4096, 4097 and 4098 are the identities 1, 2 and 3): ownerAfterTransfer, approvalClears,
+    approvedMoves and operatorMoves (also by the 2 safeTransferFrom forms), strangerRefused (the
+    call reverts and the state does not change) and balanceDirac. After each vector the views
+    ownerOf, getApproved, isApprovedForAll and balanceOf of the identities 1 to 3 equal the model,
+    and the measure is a Dirac measure at OWNER. Then supportsInterface and the id guards from
+    the genesis. -> the number of law calls."""
+    one, two, three = wallet(4096), wallet(4097), wallet(4098)
+    # (label, calls, the wanted OWNER and APPROVED); each call is (name, args, sender, success).
+    vectors = (('owner', (('transferFrom', (1, 2, 1), one, True),), 2, 0),
+               ('clears', (('approve', (3, 1), one, True), ('transferFrom', (1, 2, 1), one, True)), 2, 0),
+               ('approved', (('approve', (3, 1), one, True), ('safeTransferFrom', (1, 2, 1), three, True)), 2, 0),
+               ('operator', (('setApprovalForAll', (3, 1), one, True),
+                             ('safeTransferFromBytes', (1, 2, 1, 0x80, 0), three, True)), 2, 0),
+               ('operator-approves', (('setApprovalForAll', (2, 1), one, True), ('approve', (3, 1), two, True),
+                                      ('transferFrom', (1, 3, 1), three, True)), 3, 0),
+               ('stranger', (('transferFrom', (1, 2, 1), three, False), ('approve', (3, 1), two, False)), 1, 0),
+               ('revoked', (('setApprovalForAll', (3, 1), one, True), ('setApprovalForAll', (3, 0), one, True),
+                            ('transferFrom', (1, 2, 1), three, False)), 1, 0),
+               ('not-owner', (('approve', (3, 1), one, True), ('transferFrom', (2, 3, 1), three, False),
+                              ('transferFrom', (1, 2, 2), one, False)), 1, 3))
+    views = (('ownerOf', (1,)), ('getApproved', (1,)), ('isApprovedForAll', (1, 3)),
+             *(('balanceOf', (h,)) for h in (1, 2, 3)))
+    for label, calls, owner, approved in vectors:
+        s, chain = genesis(program), at(genesis(program))
+        for number, (name, args, sender, success) in enumerate(calls):
+            require((apply(program, s, (name, args, sender, 0)) is not None) == success,
+                    f'law-nft-{label}-{number}: the model does not give {"success" if success else "revert"}')
+            s, chain = check_step(f'law-nft-{label}-{number}', program, runtime, s, chain, (name, args, sender, 0))
+        for name, args in views:
+            s, chain = check_step(f'law-nft-{label}-{name}-{args[-1]}', program, runtime, s, chain, (name, args, SENDER, 0))
+        require((s.owner, s.approved) == (owner, approved) and [h for h, u in s.mu.items() if u] == [owner],
+                f'law-nft-{label}: OWNER {s.owner} APPROVED {s.approved} mu {s.mu}, not {owner} {approved}')
+    # (name, args, the wanted result; None: revert)
+    checks = (('supportsInterface', (0x80ac58cd << 224,), 1), ('supportsInterface', (0x01ffc9a7 << 224,), 1),
+              ('supportsInterface', (0xffffffff << 224,), 0), ('supportsInterface', (0x80ac58cd,), None),
+              ('ownerOf', (2,), None), ('getApproved', (0,), None))
+    s, chain = genesis(program), at(genesis(program))
+    for name, args, want in checks:
+        model = apply(program, s, (name, args, SENDER, 0))
+        require((model[1] if model else None) == want, f'law-nft-{name}-{args[0]:x}: the model gives {model and model[1]}')
+        s, chain = check_step(f'law-nft-{name}-{args[0]:x}', program, runtime, s, chain, (name, args, SENDER, 0))
+    return sum(len(calls) for _, calls, _, _ in vectors) + len(vectors) * len(views) + len(checks)
+
+
 def load(program):
     text = st.interestc('data', program.path)
     require(text == program.data_text(),
@@ -1110,7 +1237,7 @@ def main():
     laws = (transfer_then_distribute(*debreu) + amend_law(*debreu) + recover_law(*debreu)
             + impossibility_reverts(*impossible)
             + r_rejections(*debreu) + dust_recycle(*debreu) + dirac_vectors(*erc721)
-            + vote_laws(program, runtime) + dirac_dictator(*erc721))
+            + vote_laws(program, runtime) + dirac_dictator(*erc721) + nft_laws(*erc721))
     contract = (withdraw_moves_dust(*debreu) + selector_checks(*debreu, rich_debreu(debreu[0]))
                 + selector_checks(*impossible, genesis(impossible[0])) + selector_checks(*erc721, genesis(erc721[0]))
                 + identity_boundaries(*erc721))

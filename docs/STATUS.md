@@ -56,8 +56,16 @@ milestone of SPEC section 10 is open.
   `balanceOfByPartition`, `totalSupplyByPartition`, `transferByPartition`
   and `recoverByPartition`. The two moves log `Transfer` and
   `TransferByPartition`, and return p.
+- The ERC-721 facade (slice O5d): the optional def
+  `facade : Facade := erc721` gives a program with S = 1 the ERC-721
+  ABI: `ownerOf`, `getApproved`, `approve`, `setApprovalForAll`,
+  `isApprovedForAll`, `transferFrom`, the two `safeTransferFrom` forms
+  (with the `onERC721Received` check) and `supportsInterface` (ERC-165).
+  The contract keeps OWNER, APPROVED and OPERATOR (slots 14 to 16). The
+  language has `Facade`, `Nft` and `transferNft`.
 - Four examples: a Debreu charter vote, a labelled-constitution
-  impossibility and an ERC-721 Dirac measure with S = 1 (slice I5), and
+  impossibility and an ERC-721 Dirac measure with S = 1 (slice I5; the
+  ERC-721 ABI from slice O5d), and
   the Debreu example in token mode (slice O5b).
 
 ## Remaining work
@@ -101,7 +109,8 @@ milestone of SPEC section 10 is open.
   argument is an identity word below 2^160, so a wallet reads its mass and
   gives an allowance at the address of its identity. `approve` sets the
   allowance (the EIP-20 front-run risk: set 0 first). The ERC-721 example
-  has the ERC-20 facade, not the ERC-721 ABI (O5d).
+  has the ERC-721 ABI (O5d) with one token id (1), and its account is
+  also the identity.
 - The carrier must be a standard ERC-20: no fee on transfer and no
   rebase. `deposit` reverts when the balance of the contract does not grow
   by exactly a, and a rebase changes the balance without an entry call.

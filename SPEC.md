@@ -85,6 +85,14 @@ Debreu, `transfer(address,uint256)` and the allowance surface
 `approve`, `allowance` and `transferFrom` (O5c). A program cannot add to
 it.
 
+The optional def `facade : Facade` selects the token facade: `erc20` (the
+default when the def is absent) or `erc721` (O5d). At `erc721` the
+compiler writes the ERC-721 entries in place of the ERC-20 write facade
+(section 7). The check refuses an `erc721` program with `CONTRACT_GENESIS`
+when the genesis is not one unit in classA (S = 1), and with
+`CONTRACT_VALUE` when the asset is `token` or the regime is
+impossibility. A `facade` def of another type is `CONTRACT_TYPE`.
+
 The optional def `asset : AssetMode` selects the program asset: `wei`
 (native wei, the default when the def is absent) or `token` (the units of
 one ERC-20 carrier, O5b). The facade is the same in both modes. In token
@@ -195,6 +203,8 @@ of `Aggregation` objects. It is not a fork of `IsSelfConstituting`.
 | `transfer h k q s` | `Option InterestState` | `transferIn classA h k q s` (O4, MY CALL 203): a move without a partition moves classA units |
 | `approve o p v A` | `Allowance` | O5c. `Allowance := Identity -> Identity -> Nat` is outside InterestState, as the registry is: `A f p` is the count of units of `f` that the spender `p` can move. `approve` sets `A o p` to `v`, and no other allowance changes. The state does not change. The contract also reverts when `o` or `p` is 0 (section 7, Guards). Laws: `approveSets`, `approveOther` |
 | `transferFrom p f k q s A` | `Option (prod (Allowance, InterestState))` | O5c. `none` when `A f p < q`; else `transfer f k q s` with `A f p` := `A f p - q`, and `none` when that transfer is `none`. The spender needs an allowance also when `p = f`. Thus `transfer` stays the only write to `mu`. Laws: `transferFromMoves` (the move of `transfer` by `f`), `transferFromAllowance` (the allowance falls by q), `transferFromOver` (q above the allowance: `none`), `transferFromRestricted` (R refuses: `none` with an allowance) |
+| `approveNft a n`, `setOperator o p v n` | `Nft` | O5d. `Nft := prod (Identity, Identity -> Identity -> Nat)` is outside InterestState, as `Allowance` is: `n.0` is the approved identity of the one unit (0: none), and `n.1 f p` is not 0 when `p` is an operator of `f`. `approveNft` sets the approved identity to `a`. `setOperator` sets `n.1 o p` to `v` (the `approve` form on `n.1`). The state does not change |
+| `transferNft R P p f k s n e` | `Option (prod (Nft, InterestState))` | O5d. `mayMoveNft p f n` is leg 1 when the caller `p` is not 0 and `p` is `f`, the approved identity `n.0` or an operator of `f`. Then the result is `transfer f k 1 s` with the approved identity := 0, and `none` when that transfer is `none`. Else the result is `none`. Laws: `ownerAfterTransfer`, `approvalClears`, `approvedMoves`, `operatorMoves`, `strangerRefused`, `balanceDirac` |
 | `deposit kind a s` | `InterestState` | `reserve[kind] += a`; the identity on `mu` and on L |
 | `distribute F L kind s` | `Option InterestState` | Needs L. At impossibility L has no inhabitant, so the result is `none`. The result is `none` when `S = 0`, because the sum law cannot hold. Else `d = W(kind)(reserve[kind])`; the claim numerator of each identity h grows by `mass(h) * d`; `reserve[kind] -= d`. Sum law: the numerators grow by `S * d` in total, exactly |
 | `withdraw h s` | `prod (Nat, InterestState)` | one meaning for the embedded language and the EVM contract (O11). It pays `paid = floor(num h / S)` asset units. When `paid >= 1`, `num h` := 0, the remainder `num h mod S` goes to the dust, `reserve[rent] += dust / S` and dust := `dust mod S`. When `paid = 0`, also at `S = 0` in the language, the state does not change. Local law: `withdraw` changes only `num h`, the dust and `reserve[rent]`, and `num h + dust + S * reserve[rent]` falls by exactly `S * paid`. EVM solvency law: `S * balance >= sum of the claims + dust + S * (reserve[rent] + reserve[sale])`, where `balance` is the asset balance of the contract (the wei balance, or `balanceOf(this)` of the carrier); the two sides are equal when no direct transfer adds to the balance |
@@ -241,6 +251,15 @@ amendment), `amendKeeps` (`mu` and the treasury do not change)
 and `amendEmpty` (no change at W = 0). `examples/erc721-dirac.lang` checks
 `diracDictator`: the one holder gets all the seats.
 
+The ERC-721 approvals (O5d) are the prelude type `Nft`.
+`examples/erc721-dirac.lang` checks its 6 laws as equalities (`EqNat`):
+`ownerAfterTransfer` (the owner moves the unit), `approvalClears` (a move
+sets the approved identity to 0), `approvedMoves` (the approved identity
+moves the unit), `operatorMoves` (an operator of the owner moves the
+unit), `strangerRefused` (another caller gets `none`) and `balanceDirac`
+(the masses sum to 1 after a move). A wrong value in a law gives
+TYPE_MISMATCH.
+
 ## 6. Regimes
 
 The representation lands in one regime of `self_governance_trichotomy`
@@ -281,8 +300,11 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   identity, O5c), the ballot mapping (BALLOT, slot 11, identity to code 0
   to k, 0 = no ballot), the weight mapping (WEIGHT, slot 12, code to mass)
   (O2) and the partition mapping (PART, slot 13, keyed by partition code
-  then identity, O4). A mapping slot is `keccak256(key word, base slot
-  word)`. The slot numbers are in `domain/entries.c`.
+  then identity, O4). At the `erc721` facade (O5d), the storage also has
+  the owner identity of the one unit (OWNER, slot 14), the approved
+  identity (APPROVED, slot 15, 0 = none) and the operator mapping
+  (OPERATOR, slot 16, keyed by owner then operator identity). A mapping
+  slot is `keccak256(key word, base slot word)`. The slot numbers are in `domain/entries.c`.
 - **Code data.** The charter tables (R as a `Cap` table over pairs of
   profiles, the W gates, the issuers) and the verdict table are data in the
   runtime code. The runtime reads them with CODECOPY. The tally index comes
@@ -324,6 +346,26 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   `amend()` gives the n seats of WEIGHT by the largest remainder (ties to
   the lower code) and reads the verdict table. The identity of the caller is the registry image of the caller
   address; `to` is an identity (O10).
+  At the `erc721` facade (O5d, MY CALLs 214 to 217), the Debreu table is
+  `debreu_erc721` (32 rows). It has the entries and views above without
+  the ERC-20 write facade (`transfer(address,uint256)`, `approve`,
+  `allowance` and `transferFrom`) and without `decimals()`. It adds the
+  ERC-721 entries of the one token id TOKEN_ID (1): `ownerOf(uint256)`
+  (OWNER), `getApproved(uint256)` (APPROVED), `approve(address,uint256)`,
+  `setApprovalForAll(address,bool)`, `isApprovedForAll(address,address)`
+  (OPERATOR[owner][operator]), `transferFrom(address,address,uint256)`,
+  `safeTransferFrom(address,address,uint256)`,
+  `safeTransferFrom(address,address,uint256,bytes)` and
+  `supportsInterface(bytes4)` (ERC-165: 1 for 0x01ffc9a7 and 0x80ac58cd,
+  else 0). `totalSupply()` is S = 1. The account is the identity, as at
+  the ERC-20 facade. `transferFrom` and the two safe forms are
+  `transferNft` (section 5). Each move of the unit (q = 1) sets OWNER :=
+  `to` and APPROVED := 0; a move of q = 0 does not write OWNER or
+  APPROVED. After the move, a safe form calls
+  `onERC721Received(caller, from, TOKEN_ID, data)` on `to` when `to` has
+  code (the 3-word form gives empty data), and reverts unless the call
+  succeeds and the first word of its return data starts with the
+  selector 0x150b7a02.
 - **Events.** A successful `transfer` and a successful `recover` log one
   `Transfer(from, to, q)` record (LOG3, the ERC-20 event; `from` and `to`
   are identities), also at `q = 0` and at `to = from`. A successful
@@ -337,7 +379,13 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   logs one `Transfer(from, to, q)` record and no `Approval` record. A
   successful `approve` logs one `Approval(owner, spender, v)` record (LOG3;
   `owner` and `spender` are identities), also at `v = 0` and at an
-  unchanged `v` (O5c). No other entry logs, and a revert logs nothing.
+  unchanged `v` (O5c). At the `erc721` facade (O5d), the `Transfer` record
+  of a move is `Transfer(from, to, TOKEN_ID)` (LOG4: the token id is the
+  third topic, and there is no data), at q = 1 only; a move of q = 0 logs
+  no `Transfer` record. The creation code logs `Transfer(0, owner,
+  TOKEN_ID)`. `approve` logs `Approval(OWNER, to, TOKEN_ID)` (LOG4), and
+  `setApprovalForAll` logs `ApprovalForAll(owner, operator, b)` (LOG3, b
+  in the data). No other entry logs, and a revert logs nothing.
 - **Guards.** Short calldata and an unknown selector revert. A non-payable
   entry reverts on value. An erased proof becomes a guard, and a failed
   guard reverts. A refused transfer (R[p] fails, `q > PART[p][h]`, `to = 0`, or
@@ -360,6 +408,15 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   the state unchanged; `from = spender` also needs an allowance. `approve`
   reverts at an `address` word at or above 2^160, at `spender = 0` and for
   a caller with no identity (O5c).
+  At the `erc721` facade (O5d), a token id other than TOKEN_ID, an
+  `address` word at or above 2^160, and a `bytes4` word with a byte other
+  than 0 after its 4 high bytes revert. `balanceOf` reverts at identity
+  0. `approve` reverts unless the caller identity is OWNER or an operator
+  of OWNER. `setApprovalForAll` reverts at operator 0 and at b > 1.
+  `transferFrom` and the safe forms revert when `from` is not OWNER, when
+  the caller identity is not OWNER, APPROVED or an operator of OWNER, or
+  when the transfer is refused. The bytes form reverts when the offset or
+  the length of the bytes is out of the calldata.
   An entry of section 6 that has no meaning in
   the regime reverts.
   In token mode every entry reverts on value. A carrier call that fails,
@@ -445,14 +502,20 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   PART[p]), B3 the 4 ERC-1400 entries (`balanceOfByPartition`,
   `totalSupplyByPartition`, `transferByPartition` and
   `recoverByPartition`), and B4 8 mutants by hand and the docs. The
-  ERC-721 shape is an example program with `S = 1` (a Dirac measure).
+  ERC-721 shape is an example program with `S = 1` (a Dirac measure);
+  O5d gives it the ERC-721 ABI.
   Open: votes by partition (O4b) and payouts by partition (O4c). They are
   not planned.
 - O5. An ERC-20 asset carrier (R3 defers it), and an ERC-20 or ERC-3643 ABI
   facade with events. O5a (2026-10-09): the read facade and the `Transfer`
   event. O5b (2026-10-09): the ERC-20 asset carrier (R3 re-ruled,
-  section 4). O5c (2026-10-09): the write facade. Open: the ERC-721 ABI,
-  O5d.
+  section 4). O5c (2026-10-09): the write facade. O5d (2026-10-11): the
+  ERC-721 ABI at the `erc721` facade (RULED 2026-10-10, MY CALLs 213 to
+  224): B1 the language (`Facade`, `Nft`, `transferNft` and the 6 laws of
+  `examples/erc721-dirac.lang`) and the program data, B2 the entry table
+  `debreu_erc721` (OWNER, APPROVED, OPERATOR and the LOG4 `Transfer`), B3
+  the two `safeTransferFrom` forms and the `onERC721Received` check, and
+  B4 the claims 721 model, its law calls and 8 mutants by hand.
 - O6. The genesis charter. RULED 2026-10-08 (USER): the `start` def of the
   program gives the genesis charter, and it can be any declared charter.
   `examples/arrow-debreu.lang` has `start restricted`, the second declared
@@ -535,6 +598,13 @@ output 29, EVM boundaries 4, metadata 56 ABI comparisons, refusal 51,
 normal forms 10, differential 27 and 64 vectors, domain tests 11,
 settlement 293 cases with 9 deploys (298 EVM calls under the gas
 ceiling), and the same claims, token, allowance and vote runs, 0 failures.
+After O5d (2026-10-11), `make check` passes with parse 28, check 73,
+build output 29, EVM boundaries 4, NFT boundaries 16, metadata 56 ABI
+comparisons, refusal 51, normal forms 10, differential 27 and 64 vectors,
+domain tests 11, settlement 346 cases with 10 deploys (353 EVM calls
+under the gas ceiling), claims 20 sequences (530 steps) with 198 law
+calls and 87 contract checks, and the same token, allowance and vote
+runs, 0 failures.
 The kit debt of
 `docs/KIT-DEBT.md` is applied in lang-template `fa1131a`, and `a2ce1b8`
 is the first commit of

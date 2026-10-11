@@ -243,6 +243,55 @@ the allowance store (`example-debreu-transferfrom` fails first), and a
 `transferFrom` without the R check
 (`example-debreu-transferfrom-restricted` fails first).
 
+In slice O5d, the program def `facade : Facade := erc721` gave
+`examples/erc721-dirac.lang` the ERC-721 ABI (SPEC O5d). B1 added
+`Facade`, `Nft`, `approveNft`, `setOperator`, `mayMoveNft` and
+`transferNft` to the language, and `examples/erc721-dirac.lang` checks 6
+laws: `ownerAfterTransfer`, `approvalClears`, `approvedMoves`,
+`operatorMoves`, `strangerRefused` and `balanceDirac`. The 6 mutants
+`test/mutants/dirac-*.lang` (each one has a law at a false value) fail
+the check with TYPE_MISMATCH, and 5 data tests in `test/check.sh` check
+the facade refusals (`facade : Nat`, the genesis rows `2 classA` and
+`1 classB`, `asset token` and impossibility), so check went from 62 to
+73 cases. B2 gave the erc721 program the entry table `debreu_erc721` (30
+rows at B2, 32 at B3): the ERC-721 entries in place of the ERC-20 write
+facade, and OWNER, APPROVED and OPERATOR at slots 14 to 16.
+`test/settlement.py` has 40 new erc721 cases (333, deploy 10), and the
+gas ceiling has 42 new lines (340 calls); the old 298 lines did not
+change. `test/nft-boundaries.c` makes 16 C boundary checks of the erc721
+table. B3 added the two `safeTransferFrom` forms and the
+`onERC721Received` check, with the evmtool verb `receiver` (`accept`,
+`wrong`, `short`, `revert` and `reenter`) for the stub receivers.
+`test/settlement.py` has 13 new cases (6 table rows and 7 receiver
+cases), so its cases went to 346 and the gas ceiling to 353 calls. 5 old
+erc721 gas lines changed, each for a stated reason:
+`example-erc721-deploy` went from 2089163 to 2474600 (the runtime is
+larger, so the code deposit is larger), and the 4 supportsInterface
+lines (`-supports-erc721`, `-erc165`, `-other` and `-low`) went up by
+44 = 2 x 22 gas, one selector compare for each of the 2 safe rows before
+`supportsInterface` in the table. B4 added the 721 model to
+`test/claims.py`: OWNER, APPROVED and OPERATOR, and the 9 ERC-721
+entries. The erc721 sequences did not change. 72 new law calls check the
+model: 8 vectors (18 calls: the owner, clears, approved with the 3-word
+safe form, operator with the bytes form, operator approves, stranger,
+revoked and not-owner cases) with the 6 views after each vector (48
+calls), and 6 checks (`supportsInterface` 4 times, `ownerOf(2)` and
+`getApproved(0)`). The law calls went from 126 to 198. Eight mutants of
+`domain/entries.c` by hand make the gate fail: M1, an `approve` without
+the owner or operator check (`law-nft-stranger-1` fails first); M2, an
+`approve` that stores 0 in place of `to` (`law-nft-clears-0`); M3, a
+`setApprovalForAll` with the two keys swapped (`law-nft-operator-0`);
+M4, a `transferFrom` without the APPROVED branch of the caller check
+(`law-nft-approved-1`); M5, a `transferFrom` without the check
+`from = OWNER` (the gas line of
+`example-erc721-transfer-from-not-owner`, 9593 above 2854: at S = 1 the
+move from another identity reverts later in the move body, so the
+status, the storage and the logs are equal and no claims case kills it);
+M6, a move without `APPROVED := 0` (`law-nft-clears-1`); M7, a
+`supportsInterface` that gives 1 for 0xffffffff
+(`law-nft-supportsInterface-ffffffff`); and M8, a callback without the
+check of the 0x150b7a02 return (`example-erc721-safe-wrong`).
+
 In slice O2, a ballot became the stored code of the caller identity, and
 the tally became weighted by `mu` (SPEC O2). The Debreu tables have the
 new entry `vote(uint256)`, and `amend()` takes no argument. The ballot

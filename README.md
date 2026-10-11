@@ -40,7 +40,7 @@ An error goes to stderr as `interestc: CODE: DEF: message`, with exit 1.
 |---|---|---|
 | `examples/arrow-debreu.lang` | Arrow-Debreu | A charter vote. The plurality rule reads the orbit of the ballots, so the program writes its aggregation and the contract has `cast`, `vote` and `amend()`: each identity votes with its mass, and `amend()` gives the seats by the largest remainder. 10 genesis units over two identities; the laws of SPEC section 5 as refl proofs. |
 | `examples/arrow-impossibility.lang` | Arrow-impossibility | A labelled constitution. The rule reads member position 0, so two configurations in one orbit get two verdicts and no aggregation can exist. The contract has no `cast`, `vote`, `amend`, `transfer` or `distribute`. |
-| `examples/erc721-dirac.lang` | Arrow-Debreu | ERC-721 as a Dirac measure. S = 1: one identity holds the one unit, and `transfer` moves it whole. A veto constitution; the restricted charter admits a transfer to an accredited receiver only. |
+| `examples/erc721-dirac.lang` | Arrow-Debreu | ERC-721 as a Dirac measure. S = 1: one identity holds the one unit, and `transfer` moves it whole. The def `facade erc721` gives the ERC-721 ABI (`ownerOf`, `approve`, `setApprovalForAll`, `transferFrom`, the two `safeTransferFrom` forms and `supportsInterface`) and the laws of the approvals. A veto constitution; the restricted charter admits a transfer to an accredited receiver only. |
 
 The gate checks and compiles each example and runs its contract in geth
 (`test/check.sh`, `test/parse.sh`, `test/settlement.py`,

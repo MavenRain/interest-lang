@@ -175,6 +175,21 @@ that alias the source file, including hard links and symlinks
     Item 13 records `EVM_ENTRIES` 32. The dao kit has no partitions, so
     this item stays a difference until a later K slice rules it.
 
+## ERC-721 facade (slice O5d)
+
+16. Status 2026-10-11: a difference (slice O5d, MY CALLs 213 to 224).
+    `lang_data` (`src/check.c`) reads the optional def `facade`
+    (`LangFacade`, `domain/data.h`), and refuses an `erc721` program that
+    is not S = 1 in classA (`CONTRACT_GENESIS`), in token mode or at
+    impossibility (`CONTRACT_VALUE`). `src/asm.h` has the new opcode
+    `OP_CALLDATACOPY` (0x37) for the bytes of the `safeTransferFrom`
+    callback, and `EVM_LABELS` is 128 (it was 64). The `debreu_erc721`
+    table has 32 rows, the `EVM_ENTRIES` limit of item 13.
+    `test/evmtool.c` has the verb `receiver` (the stub receivers of the
+    callback), and `test/nft-boundaries.c` has 16 C boundary checks of the
+    erc721 table. The dao kit has no facade, so this item stays a
+    difference until a later K slice rules it.
+
 ## Differences that remain
 
 Status 2026-10-08: removed in slice I6. The program data uses the kit
