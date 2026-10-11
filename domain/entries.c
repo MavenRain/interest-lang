@@ -43,7 +43,9 @@ enum {
 
 /* The Partition code of classA, the partition of the default moves
  * transfer, transferFrom and recover (O4, MY CALL 203 (a)). */
-enum { PART_DEFAULT = 1 };
+/* PART_WORD_NONE: a move with no partition word (the default classA);
+ * FROM_CALLER: the source identity is at memory MEM_ID. */
+enum { PART_DEFAULT = 1, PART_WORD_NONE = 0xff, FROM_CALLER = 0xfe };
 
 /* MEM_CALL: the calldata of a carrier call, the selector at MEM_CALL and
  * word j at MEM_CALL + 4 + 32 j. The selector store also writes zero to
@@ -556,12 +558,91 @@ static void part_slot(Asm *a) {
   nested_slot(a, SLOT_PART);
 }
 
-/* key -> (nothing): PART[classA][key] := PART[classA][key] - q (OP_SUB) or
- * PART[classA][key] + q (OP_ADD), q the calldata word Q. The caller checks
- * q <= PART[classA][key] before a debit, and credits after the checked
+/* Reverts unless calldata word P is a partition code, 1 .. LANG_PARTITIONS
+ * right-aligned (MY CALL 206 (a)). */
+static void partition_guard(Asm *a, unsigned p) {
+  asm_push(a, LANG_PARTITIONS - 1);
+  asm_push(a, 1);
+  asm_argument(a, p);
+  asm_op(a, OP_SUB);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+}
+
+/* -> the partition code of a move: PART_DEFAULT when P is PART_WORD_NONE,
+ * else calldata word P (checked by partition_guard). */
+static void push_partition(Asm *a, unsigned p) {
+  if (p == PART_WORD_NONE)
+    asm_push(a, PART_DEFAULT);
+  else
+    asm_argument(a, p);
+}
+
+/* -> the source identity: memory MEM_ID (FROM_CALLER) or calldata word FROM. */
+static void push_from(Asm *a, unsigned from) {
+  if (from == FROM_CALLER)
+    asm_load(a, MEM_ID);
+  else
+    asm_argument(a, from);
+}
+
+/* The end of a move: returns 1 when P is PART_WORD_NONE; else LOG4
+ * TransferByPartition(p, CALLER, from, to, q, "", "") (ERC-1410, MY CALL
+ * 206 (a)) and returns p. p, to and q are calldata words. The data words
+ * are the operator CALLER, q and the 2 empty bytes (offsets 0x80 and 0xa0,
+ * lengths 0); they overwrite MEM_ID and MEM_CHARTER after the topics are
+ * on the stack. */
+static void move_return(Asm *a, unsigned from, unsigned to, unsigned q, unsigned p) {
+  if (p == PART_WORD_NONE) {
+    asm_push(a, 1);
+    asm_return_top(a);
+    return;
+  }
+  const char *event = "TransferByPartition(bytes32,address,address,address,uint256,bytes,bytes)";
+  unsigned char topic[WORD];
+  lang_keccak256((const unsigned char *)event, strlen(event), topic);
+  asm_argument(a, to);
+  push_from(a, from);
+  asm_argument(a, p);
+  asm_push_word(a, topic);
+  asm_op(a, OP_CALLER);
+  asm_store(a, 0);
+  asm_argument(a, q);
+  asm_store(a, 0x20);
+  asm_push(a, 0x80);
+  asm_store(a, 0x40);
+  asm_push(a, 0xa0);
+  asm_store(a, 0x60);
+  asm_op(a, OP_PUSH0);
+  asm_store(a, 0x80);
+  asm_op(a, OP_PUSH0);
+  asm_store(a, 0xa0);
+  asm_push(a, 0xc0);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_LOG4);
+  asm_argument(a, p);
+  asm_return_top(a);
+}
+
+/* index -> index + (p - 1) * rows * LIMITS, the R words of partition p
+ * (calldata word P); no code when P is PART_WORD_NONE (classA, offset 0). */
+static void partition_offset(Asm *a, const EntryContext *c, unsigned p) {
+  if (p == PART_WORD_NONE)
+    return;
+  asm_push(a, 1);
+  asm_argument(a, p);
+  asm_op(a, OP_SUB);
+  asm_push(a, data_rows(c) * LIMITS);
+  asm_op(a, OP_MUL);
+  asm_op(a, OP_ADD);
+}
+
+/* key -> (nothing): PART[p][key] := PART[p][key] - q (OP_SUB) or
+ * PART[p][key] + q (OP_ADD), q the calldata word Q, p the code of
+ * push_partition. The caller checks q <= PART[p][key] before a debit, and credits after the checked
  * credit of MU[key] (PART[p][key] <= MU[key]), so neither wraps. */
-static void part_term(Asm *a, Op op, unsigned q) {
-  asm_push(a, PART_DEFAULT);
+static void part_term(Asm *a, Op op, unsigned q, unsigned p) {
+  push_partition(a, p);
   part_slot(a);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
@@ -585,11 +666,11 @@ static void destination_guard(Asm *a, unsigned to) {
   asm_revert_if(a);
 }
 
-/* R: reverts when word Q >= R[classA][CHARTER][PROFILE h][PROFILE to], with
+/* R: reverts when word Q >= R[p][CHARTER][PROFILE h][PROFILE to], with
  * h at memory MEM_ID and to the calldata word TO. The classA rows come
- * first in the code data, so the partition offset (p - 1) * rows * LIMITS
- * is 0 here (O4, MY CALL 207 (a)). */
-static void restriction_guard(Asm *a, unsigned to, unsigned q) {
+ * first in the code data; partition_offset adds (p - 1) * rows * LIMITS for
+ * the calldata word P, 0 for PART_WORD_NONE (O4, MY CALL 207 (a)). */
+static void restriction_guard(Asm *a, const EntryContext *c, unsigned to, unsigned q, unsigned p) {
   asm_argument(a, to);
   asm_slot(a, SLOT_PROFILE);
   asm_op(a, OP_SLOAD);
@@ -607,6 +688,7 @@ static void restriction_guard(Asm *a, unsigned to, unsigned q) {
   asm_push(a, LIMITS);
   asm_op(a, OP_MUL);
   asm_op(a, OP_ADD);
+  partition_offset(a, c, p);
   data_word(a);
   asm_argument(a, q);
   asm_op(a, OP_LT);
@@ -659,10 +741,10 @@ static void move_vote(Asm *a) {
  * (O2); MU[h] -= q, then MU[to] += q, then PART[classA][h] -= q, then
  * PART[classA][to] += q (each credit read after its debit, so to = h keeps
  * the mass, O4); logs Transfer(h, to, q), also at q = 0 and at to = h
- * (O5a); returns 1. */
-static void move(Asm *a, unsigned to, unsigned q) {
+ * (O5a); then move_return. p: push_partition (O4). */
+static void move(Asm *a, unsigned to, unsigned q, unsigned p) {
   asm_load(a, MEM_ID);
-  asm_push(a, PART_DEFAULT);
+  push_partition(a, p);
   part_slot(a);
   asm_op(a, OP_SLOAD);
   asm_argument(a, q);
@@ -694,15 +776,14 @@ static void move(Asm *a, unsigned to, unsigned q) {
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
   asm_load(a, MEM_ID);
-  part_term(a, OP_SUB, q);
+  part_term(a, OP_SUB, q, p);
   asm_argument(a, to);
-  part_term(a, OP_ADD, q);
+  part_term(a, OP_ADD, q, p);
   asm_argument(a, to);
   asm_load(a, MEM_ID);
   asm_argument(a, q);
   transfer_log(a);
-  asm_push(a, 1);
-  asm_return_top(a);
+  move_return(a, FROM_CALLER, to, q, p);
 }
 
 /* transfer to q: h = id(CALLER); q >= R[CHARTER][PROFILE h][PROFILE to]
@@ -713,8 +794,8 @@ static void transfer(Asm *a, const EntryContext *c) {
   destination_guard(a, 0);
   caller_identity(a);
   asm_store(a, MEM_ID);
-  restriction_guard(a, 0, 1);
-  move(a, 0, 1);
+  restriction_guard(a, c, 0, 1, PART_WORD_NONE);
+  move(a, 0, 1, PART_WORD_NONE);
 }
 
 /* transfer(address to, uint256 q) of the ERC-20 facade (O5c, MY CALL 164):
@@ -722,6 +803,20 @@ static void transfer(Asm *a, const EntryContext *c) {
 static void transfer_erc20(Asm *a, const EntryContext *c) {
   asm_address_guard(a, 0);
   transfer(a, c);
+}
+
+/* transferByPartition(bytes32 p, address to, uint256 q, bytes data)
+ * (ERC-1410, MY CALL 206 (a)): p not 1 or 2, or to >= 2^160 reverts; then
+ * the transfer body with R[p] and PART[p]; logs Transfer and
+ * TransferByPartition; returns p. The entry does not read the data tail. */
+static void transfer_partition(Asm *a, const EntryContext *c) {
+  partition_guard(a, 0);
+  asm_address_guard(a, 1);
+  destination_guard(a, 1);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  restriction_guard(a, c, 1, 2, 0);
+  move(a, 1, 2, 0);
 }
 
 /* approve(address spender, uint256 v) (O5c, MY CALLs 165 and 167):
@@ -793,8 +888,8 @@ static void transfer_from(Asm *a, const EntryContext *c) {
   asm_op(a, OP_SUB);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
-  restriction_guard(a, 1, 2);
-  move(a, 1, 2);
+  restriction_guard(a, c, 1, 2, PART_WORD_NONE);
+  move(a, 1, 2, PART_WORD_NONE);
 }
 
 /* Reverts unless (CHARTER, id(CALLER)) is an issuer pair (an unrolled
@@ -856,10 +951,10 @@ static void attest(Asm *a, const EntryContext *c) {
  * to (O2); MU[from] -= q, then MU[to] += q, then PART[classA][from] -= q,
  * then PART[classA][to] += q (each credit read after its debit, so
  * to = from keeps the mass, O4); logs Transfer(from, to, q) (O5a);
- * returns 1. */
-static void recover(Asm *a, const EntryContext *c) {
+ * then move_return; w: the first word, p: push_partition (O4). */
+static void recover_move(Asm *a, const EntryContext *c, unsigned w, unsigned p) {
   issuer_guard(a, c);
-  for (unsigned j = 0; j < 2; j++) {
+  for (unsigned j = w; j < w + 2; j++) {
     asm_argument(a, j);
     asm_push(a, 1);
     asm_checked_add(a);
@@ -868,48 +963,63 @@ static void recover(Asm *a, const EntryContext *c) {
     asm_op(a, OP_ISZERO);
     asm_revert_if(a);
   }
-  asm_argument(a, 0);
-  asm_push(a, PART_DEFAULT);
+  asm_argument(a, w);
+  push_partition(a, p);
   part_slot(a);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 2);
+  asm_argument(a, w + 2);
   asm_op(a, OP_GT);
   asm_revert_if(a);
-  asm_argument(a, 0);
+  asm_argument(a, w);
   settle(a);
-  asm_argument(a, 1);
+  asm_argument(a, w + 1);
   settle(a);
-  asm_argument(a, 0);
-  asm_argument(a, 1);
-  asm_argument(a, 2);
+  asm_argument(a, w);
+  asm_argument(a, w + 1);
+  asm_argument(a, w + 2);
   move_vote(a);
-  asm_argument(a, 0);
+  asm_argument(a, w);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 2);
+  asm_argument(a, w + 2);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SUB);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
-  asm_argument(a, 1);
+  asm_argument(a, w + 1);
   asm_slot(a, SLOT_MU);
   asm_op(a, OP_DUP1);
   asm_op(a, OP_SLOAD);
-  asm_argument(a, 2);
+  asm_argument(a, w + 2);
   asm_checked_add(a);
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
-  asm_argument(a, 0);
-  part_term(a, OP_SUB, 2);
-  asm_argument(a, 1);
-  part_term(a, OP_ADD, 2);
-  asm_argument(a, 1);
-  asm_argument(a, 0);
-  asm_argument(a, 2);
+  asm_argument(a, w);
+  part_term(a, OP_SUB, w + 2, p);
+  asm_argument(a, w + 1);
+  part_term(a, OP_ADD, w + 2, p);
+  asm_argument(a, w + 1);
+  asm_argument(a, w);
+  asm_argument(a, w + 2);
   transfer_log(a);
-  asm_push(a, 1);
-  asm_return_top(a);
+  move_return(a, w, w + 1, w + 2, p);
+}
+
+/* recover from to q: the move above with the words from 0 and classA. */
+static void recover(Asm *a, const EntryContext *c) {
+  recover_move(a, c, 0, PART_WORD_NONE);
+}
+
+/* recoverByPartition(bytes32 p, address from, address to, uint256 q)
+ * (MY CALL 206 (a); ERC-1644 has no partition form): p not 1 or 2, or from
+ * or to >= 2^160 reverts; then the recover move of PART[p], issuer only, R
+ * free; logs Transfer and TransferByPartition; returns p. */
+static void recover_partition(Asm *a, const EntryContext *c) {
+  partition_guard(a, 0);
+  asm_address_guard(a, 1);
+  asm_address_guard(a, 2);
+  recover_move(a, c, 1, 0);
 }
 
 /* vote c (O2, MY CALLs 181 to 183): h = id(CALLER); c > k reverts; the
@@ -1041,6 +1151,44 @@ static void supply(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
+/* balanceOfByPartition(bytes32 p, address h) (MY CALL 206 (a)): p not 1 or
+ * 2 reverts; PART[p][h]. */
+static void mass_partition(Asm *a, const EntryContext *c) {
+  (void)c;
+  partition_guard(a, 0);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  part_slot(a);
+  asm_op(a, OP_SLOAD);
+  asm_return_top(a);
+}
+
+/* The sum of the genesis units of partition P (0 without data). */
+static unsigned long long partition_units(const LangDomainData *data, unsigned p) {
+  unsigned long long sum = 0;
+  for (size_t i = 0; data != NULL && i < data->holders; i++)
+    sum += data->holder[i].partition == p ? data->holder[i].units : 0;
+  return sum;
+}
+
+/* totalSupplyByPartition(bytes32 p) (MY CALL 206 (a)): p not 1 or 2
+ * reverts; S_p = the sum over the codes q of S_q (p = q), code constants. */
+static void supply_partition(Asm *a, const EntryContext *c) {
+  partition_guard(a, 0);
+  for (unsigned p = 1; p <= LANG_PARTITIONS; p++) {
+    unsigned char word[WORD];
+    word_of(word, partition_units(c->data, p), 0);
+    asm_push_word(a, word);
+    asm_push(a, p);
+    asm_argument(a, 0);
+    asm_op(a, OP_EQ);
+    asm_op(a, OP_MUL);
+    if (p > 1)
+      asm_op(a, OP_ADD);
+  }
+  asm_return_top(a);
+}
+
 /* claimOf h: NUM[h] + MU[h] * (INDEX - CHECKPOINT[h]), in units of 1/S wei. */
 static void claim(Asm *a, const EntryContext *c) {
   (void)c;
@@ -1163,6 +1311,10 @@ static const Entry debreu[] = {
   {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
   {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
   {"vote", 1, 0, ENTRY_NONPAYABLE, vote, NULL},
+  {"balanceOfByPartition", 2, 0, ENTRY_NONPAYABLE, mass_partition, "bytes32,address"},
+  {"totalSupplyByPartition", 1, 0, ENTRY_NONPAYABLE, supply_partition, "bytes32"},
+  {"transferByPartition", 3, 0, ENTRY_NONPAYABLE, transfer_partition, "bytes32,address,uint256,bytes"},
+  {"recoverByPartition", 4, 0, ENTRY_NONPAYABLE, recover_partition, "bytes32,address,address,uint256"},
 };
 
 /* Token mode (O5b): the same rows, but deposit takes kind and a (not
@@ -1209,6 +1361,10 @@ static const Entry debreu_token[] = {
   {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
   {"decimals", 0, 0, ENTRY_NONPAYABLE, erc20_decimals, NULL},
   {"vote", 1, 0, ENTRY_NONPAYABLE, vote, NULL},
+  {"balanceOfByPartition", 2, 0, ENTRY_NONPAYABLE, mass_partition, "bytes32,address"},
+  {"totalSupplyByPartition", 1, 0, ENTRY_NONPAYABLE, supply_partition, "bytes32"},
+  {"transferByPartition", 3, 0, ENTRY_NONPAYABLE, transfer_partition, "bytes32,address,uint256,bytes"},
+  {"recoverByPartition", 4, 0, ENTRY_NONPAYABLE, recover_partition, "bytes32,address,address,uint256"},
 };
 
 /* The table of REGIME: the token table when the program data selects the

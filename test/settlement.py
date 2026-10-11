@@ -36,8 +36,13 @@ TOKEN = '00' * 19 + 'b1'
 # transfer(address,uint256), so that `transfer` stays the native transfer(uint256,uint256).
 SIGNATURES = {'balanceOf': 'balanceOf(address)', 'erc20Transfer': 'transfer(address,uint256)',
               'approve': 'approve(address,uint256)', 'allowance': 'allowance(address,address)',
-              'transferFrom': 'transferFrom(address,address,uint256)'}
+              'transferFrom': 'transferFrom(address,address,uint256)',
+              'balanceOfByPartition': 'balanceOfByPartition(bytes32,address)',
+              'totalSupplyByPartition': 'totalSupplyByPartition(bytes32)',
+              'transferByPartition': 'transferByPartition(bytes32,address,uint256,bytes)',
+              'recoverByPartition': 'recoverByPartition(bytes32,address,address,uint256)'}
 TRANSFER = 'Transfer(address,address,uint256)'
+BY_PARTITION = 'TransferByPartition(bytes32,address,address,address,uint256,bytes,bytes)'
 PAID = 'Paid(uint256,address,uint256,uint256)'
 APPROVAL = 'Approval(address,address,uint256)'
 LOGS = '#### LOGS ####'
@@ -108,6 +113,20 @@ def topic0(signature=TRANSFER):
 def transfer_log(source, target, value, address=RECEIVER):
     """The Transfer(source, target, value) record of the account at ADDRESS."""
     return (address, (topic0(), f'{source:064x}', f'{target:064x}'), f'{value:064x}')
+
+
+def partition_logs(p, operator, source, target, value, address=RECEIVER):
+    """The records of a partition move (O4 B3, MY CALL 206 (a)): Transfer(source, target, value), then
+    TransferByPartition with the topics p, source and target and the data words OPERATOR (a wallet),
+    value, the 2 bytes offsets 0x80 and 0xa0 and the 2 lengths 0."""
+    return [transfer_log(source, target, value, address),
+            (address, (topic0(BY_PARTITION), f'{p:064x}', f'{source:064x}', f'{target:064x}'),
+             operator.rjust(64, '0') + ''.join(f'{word:064x}' for word in (value, 0x80, 0xa0, 0, 0)))]
+
+
+def by_partition(p, h, q):
+    """The calldata of transferByPartition(p, h, q, "") (O4 B3): the bytes offset 0x80 and length 0."""
+    return data('transferByPartition', p, h, q, 0x80, 0)
 
 
 def approval_log(owner, spender, value, address=RECEIVER):
@@ -413,7 +432,9 @@ def debreu_example_cases():
     one, two, three = wallet(4096), wallet(4097), wallet(4098)
     mu1, mu2 = slot(MU, 1), slot(MU, 2)
     p11, p12, p13 = parted(1, 1), parted(1, 2), parted(1, 3)
+    p21, p22 = parted(2, 1), parted(2, 2)
     opened, frozen = {**base, CHARTER: 1}, {**base, CHARTER: 3}
+    accredited = {**base, slot(PROFILE, 1): 1}
     attested = {slot(REGISTRY, 4099): 4, slot(PROFILE, 3): 2}
     rows = [('deposit-rent', data('deposit', 0), base, {**base, slot(RESERVE, 0): 7}, 7, 7, one),
             ('deposit-sale', data('deposit', 1), {**base, slot(RESERVE, 1): 3},
@@ -476,6 +497,50 @@ def debreu_example_cases():
             ('total-supply', data('totalSupply'), base, None, 10, 0, SENDER),
             ('balance-value', data('balanceOf', 1), base, None, None, 1, SENDER),
             ('transfer-zero', data('transfer', 2, 0), base, None, 1, 0, one, [transfer_log(1, 2, 0)]),
+            # The partition entries (O4 B3, MY CALL 206 (a)): the word p is 1 (classA) or 2 (classB).
+            # R[classB] refuses a receiver with an even (retail) profile, also at open; `accredited`
+            # gives identity 1 the profile 1. recoverByPartition is R free. The moves return p.
+            ('part-transfer-admit', by_partition(1, 2, 4), base, {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0,
+             one, partition_logs(1, one, 1, 2, 4)),
+            ('part-transfer-limit', by_partition(1, 2, 5), base, None, None, 0, one),
+            ('part-transfer-classb', by_partition(2, 1, 2), accredited,
+             {**accredited, mu1: 7, mu2: 3, p21: 2, p22: 0}, 2, 0, three, partition_logs(2, three, 2, 1, 2)),
+            ('part-transfer-classb-retail', by_partition(2, 1, 1), base, None, None, 0, three),
+            ('part-transfer-classb-retail-open', by_partition(2, 1, 1), opened, None, None, 0, three),
+            ('part-transfer-over-class-a', by_partition(1, 1, 4), accredited, None, None, 0, three),
+            ('part-transfer-over-class-b', by_partition(2, 1, 3), accredited, None, None, 0, three),
+            ('part-transfer-word-0', by_partition(0, 2, 1), base, None, None, 0, one),
+            ('part-transfer-word-3', by_partition(3, 2, 1), base, None, None, 0, one),
+            ('part-transfer-word-high', by_partition(2**255 + 1, 2, 1), base, None, None, 0, one),
+            ('part-transfer-value', by_partition(1, 2, 1), base, None, None, 1, one),
+            ('part-transfer-short', by_partition(1, 2, 1)[:8 + 3 * 64 - 2], base, None, None, 0, one),
+            ('part-transfer-no-tail', by_partition(1, 2, 4)[:8 + 3 * 64], base,
+             {**base, mu1: 1, mu2: 9, p11: 1, p12: 7}, 1, 0, one, partition_logs(1, one, 1, 2, 4)),
+            ('part-transfer-to-wide', by_partition(1, 2**160, 1), base, None, None, 0, one),
+            ('part-transfer-no-identity', by_partition(1, 2, 1), base, None, None, 0, SENDER),
+            ('part-transfer-self', by_partition(1, 1, 3), base, None, 1, 0, one, partition_logs(1, one, 1, 1, 3)),
+            ('part-recover-issuer', data('recoverByPartition', 1, 2, 3, 2), base,
+             {**base, mu2: 3, slot(MU, 3): 2, p12: 1, p13: 2}, 1, 0, one, partition_logs(1, one, 2, 3, 2)),
+            ('part-recover-r-free', data('recoverByPartition', 2, 2, 1, 2), base,
+             {**base, mu1: 7, mu2: 3, p21: 2, p22: 0}, 2, 0, one, partition_logs(2, one, 2, 1, 2)),
+            ('part-recover-over-class', data('recoverByPartition', 2, 2, 1, 3), base, None, None, 0, one),
+            ('part-recover-non-issuer', data('recoverByPartition', 1, 1, 2, 1), base, None, None, 0, two),
+            ('part-recover-word-0', data('recoverByPartition', 0, 2, 3, 1), base, None, None, 0, one),
+            ('part-recover-word-3', data('recoverByPartition', 3, 2, 3, 1), base, None, None, 0, one),
+            ('part-recover-from-wide', data('recoverByPartition', 1, 2**160, 3, 1), base, None, None, 0, one),
+            ('part-recover-value', data('recoverByPartition', 1, 2, 3, 1), base, None, None, 1, one),
+            ('part-recover-short', data('recoverByPartition', 1, 2, 3, 1)[:-2], base, None, None, 0, one),
+            ('part-balance-a-1', data('balanceOfByPartition', 1, 1), base, None, 5, 0, SENDER),
+            ('part-balance-a-2', data('balanceOfByPartition', 1, 2), base, None, 3, 0, SENDER),
+            ('part-balance-b-1', data('balanceOfByPartition', 2, 1), base, None, 0, 0, SENDER),
+            ('part-balance-b-2', data('balanceOfByPartition', 2, 2), base, None, 2, 0, SENDER),
+            ('part-balance-word-0', data('balanceOfByPartition', 0, 1), base, None, None, 0, SENDER),
+            ('part-balance-word-3', data('balanceOfByPartition', 3, 2), base, None, None, 0, SENDER),
+            ('part-balance-value', data('balanceOfByPartition', 1, 1), base, None, None, 1, SENDER),
+            ('part-supply-a', data('totalSupplyByPartition', 1), base, None, 8, 0, SENDER),
+            ('part-supply-b', data('totalSupplyByPartition', 2), base, None, 2, 0, SENDER),
+            ('part-supply-word-0', data('totalSupplyByPartition', 0), base, None, None, 0, SENDER),
+            ('part-supply-word-3', data('totalSupplyByPartition', 3), base, None, None, 0, SENDER),
             ('no-selector', 'aabbcc', base, None, None, 0, one),
             ('unknown', 'ffffffff', base, None, None, 0, one)]
     # The ERC-20 write facade (O5c B1, MY CALL 172): identity 2 (wallet 4097) spends the
@@ -726,6 +791,12 @@ def token_cases():
               {**base, a12: 2, mu1: 2, slot(MU, 3): 3, parted(1, 1): 2, parted(1, 3): 3}, 1, 'standard', {}, None, 0,
               wallet(4097),
               [transfer_log(1, 3, 3)])]
+    # The partition entries in token mode (O4 B3): the same body as in wei mode. The token genesis
+    # has no classB units (identity 2 holds 5 classA), so S_1 = 10.
+    rows += [('part-transfer', by_partition(1, 2, 4), base,
+              {**base, mu1: 1, slot(MU, 2): 9, parted(1, 1): 1, parted(1, 2): 9}, 1, 'standard', {}, None, 0, one,
+              partition_logs(1, one, 1, 2, 4)),
+             ('part-supply', data('totalSupplyByPartition', 1), base, None, 10, 'standard', {}, None, 0, SENDER, [])]
     cases = sum(token_case(f'example-debreu-token-{label}', runtime, calldata, before,
                            before if after is None else after, result, variant=variant, held=store,
                            moved=after_store, value=value, sender=sender, logs=logs)

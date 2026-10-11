@@ -40,9 +40,12 @@ from settlement import (ALLOWANCE, BALLOT, CARRIER, CHARTER, CHECKPOINT, DUST, I
 WORD = 2**256
 BASE = 10**24
 WORDS = dict(deposit=1, distribute=1, withdraw=0, transfer=2, attest=3, recover=3, cast=3, amend=0, vote=1,
-             mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0, balanceOf=1, totalSupply=0)
+             mass=1, supply=0, claimOf=1, charter=0, reserve=1, selfConstituting=0, balanceOf=1, totalSupply=0,
+             balanceOfByPartition=2, totalSupplyByPartition=1, transferByPartition=5, recoverByPartition=4)
 FACADE = ('balanceOf', 'totalSupply')
 VIEWS = ('mass', 'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting') + FACADE
+# The ERC-1400 views (O4 B3).
+PARTITION_VIEWS = ('balanceOfByPartition', 'totalSupplyByPartition')
 IDENTITIES = range(5)
 HERE = int(st.RECEIVER, 16)
 # The token run (MY CALL 159): the carrier balance and the allowance to the contract of each
@@ -112,7 +115,8 @@ DEBREU = Program(
     'debreu', st.DEBREU, 2, ((4096, 1, 0, 5, 1), (4097, 2, 3, 3, 1), (4098, 2, 3, 2, 2)),
     (('a',) * 16, ('u4',) * 16, ('d',) * 16), ('pp', 'pr', 'rr'), ((1, 1), (2, 1)),
     ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'vote', 'mass',
-     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply'), 1,
+     'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply',
+     'balanceOfByPartition', 'totalSupplyByPartition', 'transferByPartition', 'recoverByPartition'), 1,
     erc20_name='Arrow-Debreu', erc20_symbol='AD', classb=(('d', 'a') * 8, ('d', 'u4') * 8, ('d',) * 16))
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
@@ -282,13 +286,24 @@ def transfer(program, s, sender, value, to, q):
     return None if h is None else send(program, s, h, to, q)
 
 
-def send(program, s, h, to, q):
-    """The move of transfer by identity h: iff to > 0, R(h, to, q) and q <= the classA mass
-    of h (O4 B2; PART[classA][h] <= mass h)."""
-    code = program.restrict[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
-    if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.part.get((CLASS_A, h), 0):
+def send(program, s, h, to, q, p=CLASS_A):
+    """The move of transfer by identity h in partition p: iff to > 0, R[p](h, to, q) and q <=
+    the partition p mass of h (O4 B2; PART[p][h] <= mass h). R[classA] is the restrict table;
+    R of partition 2 is `classb` (empty: the restrict table) (O4 B3)."""
+    table = program.restrict if p == CLASS_A else (program.classb or program.restrict)
+    code = table[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
+    if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.part.get((p, h), 0):
         return None
-    return move(s, h, to, q)
+    return move(s, h, to, q, p)
+
+
+def transfer_by_partition(program, s, sender, value, p, to, q, *tail):
+    """transferByPartition(p, to, q, data) (O4 B3): a partition word other than 1 and 2, or
+    to >= 2^160, reverts; else the move of transfer by id(caller) in partition p. The data
+    tail is not read. The result is p."""
+    h = identity(s, sender)
+    moved = None if h is None or p not in PARTITIONS or to >= 2**160 else send(program, s, h, to, q, p)
+    return None if moved is None else (moved[0], p)
 
 
 def erc20_transfer(program, s, sender, value, to, q):
@@ -322,19 +337,19 @@ def allowance_view(program, s, sender, value, o, p):
     return None if max(o, p) >= 2**160 else (s, s.allowance.get((o, p), 0))
 
 
-def move(s, h, to, q):
+def move(s, h, to, q, p=CLASS_A):
     """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
     vote of q moves from the ballot of h to the ballot of to (O2); then the same debit and
-    credit of PART[classA] (O4 B2)."""
+    credit of PART[p] (O4 B2: classA; O4 B3: the partition p)."""
     first = settle(s, h)
     second = None if first is None else settle(first, to)
     if second is None:
         return None
     debited = {**second.mu, h: second.mu.get(h, 0) - q}
     weight = shift(second.weight, second.ballot.get(h, 0), second.ballot.get(to, 0), q)
-    taken = {**second.part, (CLASS_A, h): second.part.get((CLASS_A, h), 0) - q}
+    taken = {**second.part, (p, h): second.part.get((p, h), 0) - q}
     return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight,
-                               part={**taken, (CLASS_A, to): taken.get((CLASS_A, to), 0) + q}), 1
+                               part={**taken, (p, to): taken.get((p, to), 0) + q}), 1
 
 
 def issuer(program, s, sender):
@@ -350,13 +365,21 @@ def attest(program, s, sender, value, w, h, p):
     return dataclasses.replace(s, registry={**s.registry, w: h + 1}, profile={**s.profile, h: p}), 1
 
 
-def recover(program, s, sender, value, h, to, q):
+def recover(program, s, sender, value, h, to, q, p=CLASS_A):
     """ERC-1644 forced transfer by a trusted issuer of the active charter (O3): the move
-    of transfer iff h > 0, to > 0 and q <= the classA mass of h (O4 B2); R does not gate it."""
+    of transfer in partition p iff h > 0, to > 0 and q <= the partition p mass of h (O4 B2,
+    B3); R does not gate it."""
     if (not issuer(program, s, sender) or 0 in (h, to) or h + 1 >= WORD or to + 1 >= WORD
-            or q > s.part.get((CLASS_A, h), 0)):
+            or q > s.part.get((p, h), 0)):
         return None
-    return move(s, h, to, q)
+    return move(s, h, to, q, p)
+
+
+def recover_by_partition(program, s, sender, value, p, h, to, q):
+    """recoverByPartition(p, from, to, q) (O4 B3): a partition word other than 1 and 2, or
+    from or to >= 2^160, reverts; else recover in partition p (R free). The result is p."""
+    moved = None if p not in PARTITIONS or max(h, to) >= 2**160 else recover(program, s, sender, value, h, to, q, p)
+    return None if moved is None else (moved[0], p)
 
 
 def cast(program, s, sender, value, *ballots):
@@ -405,14 +428,19 @@ def view(name):
                    claimOf=lambda h: claim(s, h), charter=lambda: s.charter,
                    reserve=lambda kind: s.reserve[kind] if kind < 2 else None,
                    selfConstituting=lambda: program.constituting,
-                   balanceOf=lambda h: s.mu.get(h, 0), totalSupply=lambda: program.supply)[name](*args)
+                   balanceOf=lambda h: s.mu.get(h, 0), totalSupply=lambda: program.supply,
+                   balanceOfByPartition=lambda p, h: s.part.get((p, h), 0) if p in PARTITIONS else None,
+                   totalSupplyByPartition=lambda p: (sum(row[3] for row in program.genesis if row[4] == p)
+                                                     if p in PARTITIONS else None))[name](*args)
         return None if out is None else (s, out)
     return result
 
 
 OPS = dict(deposit=deposit, distribute=distribute, withdraw=withdraw, transfer=transfer,
            attest=attest, recover=recover, cast=cast, amend=amend, vote=vote, erc20Transfer=erc20_transfer,
-           approve=approve, transferFrom=transfer_from, allowance=allowance_view, **{name: view(name) for name in VIEWS})
+           approve=approve, transferFrom=transfer_from, allowance=allowance_view,
+           transferByPartition=transfer_by_partition, recoverByPartition=recover_by_partition,
+           **{name: view(name) for name in VIEWS + PARTITION_VIEWS})
 
 
 def apply(program, s, call):
@@ -462,12 +490,18 @@ def records(program, s, call, model):
     """The records of CALL from S: a successful transfer logs Transfer(h, to, q) and a
     successful recover logs Transfer(from, to, q) (O5a); the ERC-20 transfer and transferFrom
     log as transfer and recover, and approve logs Approval(owner, spender, v) (O5c); a successful
-    withdraw logs Paid(h, wallet, paid, moved) (O11); a revert or any other entry logs none."""
+    withdraw logs Paid(h, wallet, paid, moved) (O11); a successful transferByPartition or
+    recoverByPartition logs Transfer, then TransferByPartition(p, operator, from, to, q) (O4 B3);
+    a revert or any other entry logs none."""
     name, args, sender, value = call
     moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q),
                  erc20Transfer=lambda to, q: (identity(s, sender), to, q), transferFrom=lambda h, to, q: (h, to, q))
+    parted = dict(transferByPartition=lambda p, to, q, *tail: (p, sender, identity(s, sender), to, q),
+                  recoverByPartition=lambda p, h, to, q: (p, sender, h, to, q))
     if model and name in moves:
         return [st.transfer_log(*moves[name](*args))]
+    if model and name in parted:
+        return st.partition_logs(*parted[name](*args))
     if model and name == 'approve':
         return [st.approval_log(identity(s, sender), *args)]
     if model and name == 'withdraw':
@@ -536,12 +570,19 @@ ALLOWANCE_SEEDS, ALLOWANCE_LENGTH = range(201, 211), 20
 COVER_ALLOWANCE = {'approve+', 'transferFrom-moves', 'erc20Transfer+', 'transfer+'}
 # The vote run (O2, MY CALL 190 (a)): its own seeds, 10 sequences of 30 steps, the Debreu tables
 # with the write facade. The draws are vote (0 withdraws, 4 > k reverts), amend() alone, the 4
-# moves (with approve, so that transferFrom moves), attest and the views. vote-mass is a vote
+# moves (with approve, so that transferFrom moves), attest, the views and the ERC-1400 entries (O4 B3). vote-mass is a vote
 # for a code by an identity with mass; weight-moves is a call other than vote that moves WEIGHT.
 VOTE_ARGS = dict(ALLOWANCE_ARGS, vote=lambda r: (r.choice((0, 1, 1, 2, 2, 3, 3, 4)),), amend=lambda r: (),
-                 recover=lambda r: (r.choice((0, 1, 1, 2, 2)), r.randrange(0, 5), r.randrange(0, 6)))
+                 recover=lambda r: (r.choice((0, 1, 1, 2, 2)), r.randrange(0, 5), r.randrange(0, 6)),
+                 transferByPartition=lambda r: (r.choice((0, 1, 1, 2, 2, 3)), r.randrange(0, 5), r.randrange(0, 6),
+                                                0x80, 0),
+                 recoverByPartition=lambda r: (r.choice((0, 1, 1, 2, 2, 3)), r.choice((0, 1, 1, 2, 2)),
+                                               r.randrange(0, 5), r.randrange(0, 6)),
+                 balanceOfByPartition=lambda r: (r.choice((0, 1, 2, 3)), r.randrange(0, 5)),
+                 totalSupplyByPartition=lambda r: (r.choice((0, 1, 2, 3)),))
 VOTE_CHOICES = (('vote',) * 6 + ('amend',) * 3 + ('transfer',) * 3 + ('erc20Transfer',) * 2 + ('approve',) * 2
-                + ('transferFrom',) * 3 + ('recover',) * 2 + ('attest',) + VIEWS)
+                + ('transferFrom',) * 3 + ('recover',) * 2 + ('attest',) + VIEWS
+                + ('transferByPartition',) * 3 + ('recoverByPartition',) * 2 + PARTITION_VIEWS)
 VOTE_SEEDS, VOTE_LENGTH = range(301, 311), 30
 COVER_VOTE = {'vote-mass', 'vote0', 'amend+', 'weight-moves'}
 
