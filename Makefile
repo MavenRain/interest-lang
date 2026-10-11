@@ -30,9 +30,13 @@ build/metadata: test/metadata.c
 	mkdir -p build
 	$(TCC) $(CFLAGS) -o $@ test/metadata.c
 
+build/nft-boundaries: test/nft-boundaries.c $(filter-out src/main.c,$(SRC)) $(HEADERS) build/domain.c
+	mkdir -p build
+	$(TCC) $(CFLAGS) -o $@ test/nft-boundaries.c $(filter-out src/main.c,$(SRC)) build/domain.c
+
 check-clang: build/domain.c
 	$(CC) $(CLANG_FLAGS) $(SRC) build/domain.c
-	$(CC) $(CLANG_FLAGS) test/parsetool.c test/evmtool.c test/evm-boundaries.c test/metadata.c
+	$(CC) $(CLANG_FLAGS) test/parsetool.c test/evmtool.c test/evm-boundaries.c test/metadata.c test/nft-boundaries.c
 
 # Test domains (test/domains.sh): build/NAME/interestc embeds test/domains/NAME.lang.
 DOMAINS = k4 decision-arg review-k10-domain
@@ -45,7 +49,7 @@ build/%/domain.c: test/domains/%.lang gen/embed.c
 build/%/interestc: $(SRC) $(HEADERS) build/%/domain.c
 	$(TCC) $(CFLAGS) -o $@ $(SRC) build/$*/domain.c
 
-check: build check-clang build/evm-boundaries build/metadata $(DOMAINS:%=build/%/interestc)
+check: build check-clang build/evm-boundaries build/metadata build/nft-boundaries $(DOMAINS:%=build/%/interestc)
 	sh test/gate.sh
 
 clean:

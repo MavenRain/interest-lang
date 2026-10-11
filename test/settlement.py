@@ -25,12 +25,17 @@ GENESIS = dict(config=CONFIG, coinbase='0x' + '00' * 20, difficulty='0x0', gasLi
                excessBlobGas='0x0', blobGasUsed='0x0')
 CODES = (3, 3, 2, 2, 3, 3, 2, 1, 1, 1)
 MU, REGISTRY, PROFILE, CHARTER, RESERVE, INDEX, CHECKPOINT, NUM, DUST, CARRIER, ALLOWANCE, BALLOT, WEIGHT, PART = range(14)
+# The ERC-721 facade (O5d, MY CALL 214): the slots OWNER, APPROVED and OPERATOR[owner][operator],
+# and the one token id.
+OWNER, APPROVED, OPERATOR = range(14, 17)
+TOKEN_ID = 1
 INTERESTC = ROOT / 'build/interestc'
 BASELINE = ROOT / 'test/gas-baseline.txt'
 USED = {}
 DEBREU = ROOT / 'examples/arrow-debreu.lang'
 DEBREU_TOKEN = ROOT / 'examples/arrow-debreu-token.lang'
 IMPOSSIBILITY = ROOT / 'examples/arrow-impossibility.lang'
+DIRAC = ROOT / 'examples/erc721-dirac.lang'
 TOKEN = '00' * 19 + 'b1'
 # The ERC-20 facade signatures (O5a, O5c). erc20Transfer is the key of the ERC-20
 # transfer(address,uint256), so that `transfer` stays the native transfer(uint256,uint256).
@@ -40,8 +45,12 @@ SIGNATURES = {'balanceOf': 'balanceOf(address)', 'erc20Transfer': 'transfer(addr
               'balanceOfByPartition': 'balanceOfByPartition(bytes32,address)',
               'totalSupplyByPartition': 'totalSupplyByPartition(bytes32)',
               'transferByPartition': 'transferByPartition(bytes32,address,uint256,bytes)',
-              'recoverByPartition': 'recoverByPartition(bytes32,address,address,uint256)'}
+              'recoverByPartition': 'recoverByPartition(bytes32,address,address,uint256)',
+              'setApprovalForAll': 'setApprovalForAll(address,bool)',
+              'isApprovedForAll': 'isApprovedForAll(address,address)',
+              'supportsInterface': 'supportsInterface(bytes4)'}
 TRANSFER = 'Transfer(address,address,uint256)'
+APPROVAL_FOR_ALL = 'ApprovalForAll(address,address,bool)'
 BY_PARTITION = 'TransferByPartition(bytes32,address,address,address,uint256,bytes,bytes)'
 PAID = 'Paid(uint256,address,uint256,uint256)'
 APPROVAL = 'Approval(address,address,uint256)'
@@ -132,6 +141,17 @@ def by_partition(p, h, q):
 def approval_log(owner, spender, value, address=RECEIVER):
     """The Approval(owner, spender, value) record of approve (O5c) at ADDRESS."""
     return (address, (topic0(APPROVAL), f'{owner:064x}', f'{spender:064x}'), f'{value:064x}')
+
+
+def nft_log(source, target, signature=TRANSFER, address=RECEIVER):
+    """The LOG4 record SIGNATURE(source, target, TOKEN_ID) of the ERC-721 facade (O5d) at ADDRESS:
+    Transfer or Approval, the token id is topic3 and there is no data."""
+    return (address, (topic0(signature), f'{source:064x}', f'{target:064x}', f'{TOKEN_ID:064x}'), '')
+
+
+def operator_log(owner, operator, approved, address=RECEIVER):
+    """The ApprovalForAll(owner, operator, approved) record of setApprovalForAll (O5d) at ADDRESS."""
+    return (address, (topic0(APPROVAL_FOR_ALL), f'{owner:064x}', f'{operator:064x}'), f'{approved:064x}')
 
 
 @functools.cache
@@ -296,16 +316,18 @@ def amend_pins():
     return 2
 
 
-def deploy(name, creation, runtime, storage, logs=(), *, suffix='', token=None):
+def deploy(name, creation, runtime, storage, logs=(), *, suffix='', token=None, nft=False):
     """LOGS: the (identity, units) of each genesis Transfer record, in genesis order. SUFFIX: the
-    constructor word after the init code (token mode); TOKEN: the carrier account of run."""
+    constructor word after the init code (token mode); TOKEN: the carrier account of run. NFT: the
+    erc721 facade, whose genesis record is the LOG4 nft_log (O5d)."""
     made = run(name, creation + suffix, '', create=True, token=token)
     require(made['status'] == 'success' and made['output'] == runtime,
             f'{name}: creation did not return the runtime')
     written = list(made['created'].values())
     require(made['storage'] == {} and written == [storage],
             f'{name}: genesis storage {written} != [{storage}]')
-    wanted = [transfer_log(0, h, units, address) for address in made['created'] for h, units in logs]
+    wanted = [nft_log(0, h, address=address) if nft else transfer_log(0, h, units, address)
+              for address in made['created'] for h, units in logs]
     require(made['logs'] == wanted, f'{name}: genesis logs {made["logs"]} != {wanted}')
     paid = run(name + '-value', creation + suffix, '', value=1, create=True, token=token)
     require(paid['status'] == 'revert' and paid['output'] == '' and paid['logs'] == [], f'{name}: creation took a value')
@@ -350,19 +372,21 @@ def data_logs(program, binary=None):
     return [(h, u) for h, u in sums if u]
 
 
-def program_code(name, program, logs=None, *, suffix='', token=None):
+def program_code(name, program, logs=None, *, suffix='', token=None, nft=False):
     """Deploys the creation code of `interestc build PROGRAM` against its data; -> the runtime.
     LOGS: the genesis records (None: data_logs of PROGRAM). SUFFIX (token mode): the constructor
-    word, which the genesis writes to CARRIER; TOKEN: the carrier account of run."""
+    word, which the genesis writes to CARRIER; TOKEN: the carrier account of run. NFT (the erc721
+    facade, O5d): the genesis also writes OWNER := the identity of the genesis record."""
     def part(label, *flags):
         out = WORK / f'{name}-{label}.hex'
         interestc('build', program, *flags, '-o', out)
         return out.read_text().strip()
 
     creation, runtime = part('creation'), part('runtime', '--runtime')
-    storage = data_storage(program) | ({CARRIER: int(suffix, 16)} if suffix else {})
-    deploy(f'{name}-deploy', creation, runtime, storage, data_logs(program) if logs is None else logs,
-           suffix=suffix, token=token)
+    records = data_logs(program) if logs is None else logs
+    storage = (data_storage(program) | ({CARRIER: int(suffix, 16)} if suffix else {})
+               | ({OWNER: h for h, _ in records} if nft else {}))
+    deploy(f'{name}-deploy', creation, runtime, storage, records, suffix=suffix, token=token, nft=nft)
     return runtime
 
 
@@ -805,6 +829,65 @@ def token_cases():
     return cases, 4
 
 
+def erc721_cases():
+    """The ERC-721 facade entries (O5d B2, MY CALLs 214 to 217) at the genesis of
+    examples/erc721-dirac.lang: start open; identity 1 (wallet 4096, profile 0) holds the one unit
+    and is OWNER; identity 2 (wallet 4097, profile 3) and identity 3 (wallet 4098, profile 0) hold
+    none. A move of the unit writes OWNER := to and APPROVED := 0 and logs the LOG4
+    Transfer(from, to, 1); a move of q = 0 writes and logs nothing. -> (cases, deploys)."""
+    runtime = program_code('example-erc721', DIRAC, [(1, 1)], nft=True)
+    base = data_storage(DIRAC) | {OWNER: 1}
+    one, two, three = wallet(4096), wallet(4097), wallet(4098)
+    moved = {**base, slot(MU, 1): 0, slot(MU, 2): 1, parted(1, 1): 0, parted(1, 2): 1, OWNER: 2}
+    approved, operating = {**base, APPROVED: 2}, {**base, nested(OPERATOR, 1, 3): 1}
+    frozen = {**base, CHARTER: 3}
+    erc721, erc165 = 0x80ac58cd << 224, 0x01ffc9a7 << 224
+    rows = [('owner-of', data('ownerOf', 1), base, None, 1, 0, SENDER),
+            ('owner-of-id', data('ownerOf', 2), base, None, None, 0, SENDER),
+            ('balance-owner', data('balanceOf', 1), base, None, 1, 0, SENDER),
+            ('balance-other', data('balanceOf', 2), base, None, 0, 0, SENDER),
+            ('balance-wide', data('balanceOf', 2**160), base, None, None, 0, SENDER),
+            ('balance-zero', data('balanceOf', 0), base, None, None, 0, SENDER),
+            ('get-approved', data('getApproved', 1), approved, None, 2, 0, SENDER),
+            ('get-approved-id', data('getApproved', 0), approved, None, None, 0, SENDER),
+            ('approve', data('approve', 2, 1), base, approved, '', 0, one, [nft_log(1, 2, APPROVAL)]),
+            ('approve-operator', data('approve', 2, 1), operating, {**operating, APPROVED: 2}, '', 0, three,
+             [nft_log(1, 2, APPROVAL)]),
+            ('approve-clear', data('approve', 0, 1), approved, base, '', 0, one, [nft_log(1, 0, APPROVAL)]),
+            ('approve-stranger', data('approve', 2, 1), base, None, None, 0, two),
+            ('approve-id', data('approve', 2, 2), base, None, None, 0, one),
+            ('approve-wide', data('approve', 2**160, 1), base, None, None, 0, one),
+            ('approve-no-identity', data('approve', 2, 1), base, None, None, 0, SENDER),
+            ('approve-value', data('approve', 2, 1), base, None, None, 1, one),
+            ('set-operator', data('setApprovalForAll', 3, 1), base, operating, '', 0, one, [operator_log(1, 3, 1)]),
+            ('unset-operator', data('setApprovalForAll', 3, 0), operating, base, '', 0, one,
+             [operator_log(1, 3, 0)]),
+            ('set-operator-zero', data('setApprovalForAll', 0, 1), base, None, None, 0, one),
+            ('set-operator-wide', data('setApprovalForAll', 2**160, 1), base, None, None, 0, one),
+            ('set-operator-bool', data('setApprovalForAll', 3, 2), base, None, None, 0, one),
+            ('is-operator', data('isApprovedForAll', 1, 3), operating, None, 1, 0, SENDER),
+            ('is-operator-not', data('isApprovedForAll', 3, 1), operating, None, 0, 0, SENDER),
+            ('is-operator-wide', data('isApprovedForAll', 1, 2**160), operating, None, None, 0, SENDER),
+            ('transfer-from-owner', data('transferFrom', 1, 2, 1), approved, moved, '', 0, one, [nft_log(1, 2)]),
+            ('transfer-from-approved', data('transferFrom', 1, 2, 1), approved, moved, '', 0, two, [nft_log(1, 2)]),
+            ('transfer-from-operator', data('transferFrom', 1, 2, 1), operating,
+             {**moved, nested(OPERATOR, 1, 3): 1}, '', 0, three, [nft_log(1, 2)]),
+            ('transfer-from-stranger', data('transferFrom', 1, 2, 1), base, None, None, 0, three),
+            ('transfer-from-not-owner', data('transferFrom', 2, 3, 1), base, None, None, 0, two),
+            ('transfer-from-id', data('transferFrom', 1, 2, 2), base, None, None, 0, one),
+            ('transfer-from-wide', data('transferFrom', 1, 2**160, 1), base, None, None, 0, one),
+            ('transfer-from-to-zero', data('transferFrom', 1, 0, 1), base, None, None, 0, one),
+            ('transfer-from-frozen', data('transferFrom', 1, 2, 1), frozen, None, None, 0, one),
+            ('supports-erc721', data('supportsInterface', erc721), base, None, 1, 0, SENDER),
+            ('supports-erc165', data('supportsInterface', erc165), base, None, 1, 0, SENDER),
+            ('supports-other', data('supportsInterface', 0xffffffff << 224), base, None, 0, 0, SENDER),
+            ('supports-low', data('supportsInterface', erc721 | 1), base, None, None, 0, SENDER),
+            ('transfer-one', data('transfer', 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)]),
+            ('transfer-zero', data('transfer', 2, 0), approved, None, 1, 0, one),
+            ('recover-one', data('recover', 1, 2, 1), approved, moved, 1, 0, one, [nft_log(1, 2)])]
+    return table_cases('example-erc721', runtime, rows), 1
+
+
 def gas_check(write):
     """The gas of each EVM call (USED, run order) against BASELINE lines `name gas`:
     the same names in the same order, and no call above its line."""
@@ -859,8 +942,10 @@ def main(write_gas):
            bytecode('runtime', members, 'debreu', *codes), {CHARTER: 1})
     cases += amend_pins() + debreu_example_cases() + impossibility_example_cases()
     carried, deploys = token_cases()
+    owned, nft_deploys = erc721_cases()
     gas = gas_check(write_gas)
-    print(f'SETTLEMENT cases={cases + carried} deploy={5 + deploys} geth=expected OK (logs: {WORK})')
+    print(f'SETTLEMENT cases={cases + carried + owned} deploy={5 + deploys + nft_deploys} geth=expected OK '
+          f'(logs: {WORK})')
     print(gas)
 
 

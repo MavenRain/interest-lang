@@ -17,7 +17,11 @@
  * with that ballot) hold the weighted tally (O2, MY CALLs 182, 183 and
  * 186). PART (slot 13, partition code 1 .. 2, then identity -> units, a
  * nested mapping as ALLOWANCE) holds the units of each partition; MU[h] is
- * the sum over the partitions of PART[p][h] (O4, MY CALL 202 (a)). In token
+ * the sum over the partitions of PART[p][h] (O4, MY CALL 202 (a)). At the
+ * ERC-721 facade (O5d, MY CALL 216 (a)), OWNER (slot 14) is the identity
+ * with MU = 1, APPROVED (slot 15) is the approved identity (0 = none) and
+ * OPERATOR (slot 16, a nested mapping as ALLOWANCE) maps an owner
+ * identity, then an operator identity, to 0 or 1. In token
  * mode, each amount in wei is an
  * amount in carrier units. S, the sum of the genesis units, is a code
  * constant. A mapping entry lives at keccak256(key . slot), as in Solidity.
@@ -38,8 +42,12 @@ enum {
   SLOT_MU = 0, SLOT_REGISTRY = 1, SLOT_PROFILE = 2, SLOT_CHARTER = 3,
   SLOT_RESERVE = 4, SLOT_INDEX = 5, SLOT_CHECKPOINT = 6, SLOT_NUM = 7,
   SLOT_DUST = 8, SLOT_CARRIER = 9, SLOT_ALLOWANCE = 10, SLOT_BALLOT = 11,
-  SLOT_WEIGHT = 12, SLOT_PART = 13
+  SLOT_WEIGHT = 12, SLOT_PART = 13, SLOT_OWNER = 14, SLOT_APPROVED = 15,
+  SLOT_OPERATOR = 16
 };
+
+/* The one token id of the ERC-721 facade (O5d, MY CALL 215 (a)). */
+enum { TOKEN_ID = 1 };
 
 /* The Partition code of classA, the partition of the default moves
  * transfer, transferFrom and recover (O4, MY CALL 203 (a)). */
@@ -535,6 +543,23 @@ static void approval_log(Asm *a) {
   erc20_log(a, "Approval(address,address,uint256)");
 }
 
+/* third second first -> (nothing): LOG4 EVENT(first, second, third), an
+ * ERC-721 event with 3 indexed words and no data (O5d, MY CALL 217 (a)).
+ * topic0 is keccak256(EVENT). */
+static void nft_log(Asm *a, const char *event) {
+  unsigned char topic[WORD];
+  lang_keccak256((const unsigned char *)event, strlen(event), topic);
+  asm_push_word(a, topic);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_LOG4);
+}
+
+/* True when the program data selects the ERC-721 facade (O5d). */
+static int facade_nft(const EntryContext *c) {
+  return c != NULL && c->data != NULL && c->data->facade == LANG_FACADE_ERC721;
+}
+
 /* inner outer -> the slot of BASE[outer][inner]:
  * keccak256(inner . keccak256(outer . BASE)), the Solidity nested mapping. */
 static void nested_slot(Asm *a, unsigned base) {
@@ -556,6 +581,11 @@ static void allowance_slot(Asm *a) {
 /* h p -> the slot of PART[p][h] (O4, MY CALL 202 (a)). */
 static void part_slot(Asm *a) {
   nested_slot(a, SLOT_PART);
+}
+
+/* op owner -> the slot of OPERATOR[owner][op] (O5d, MY CALL 216 (a)). */
+static void operator_slot(Asm *a) {
+  nested_slot(a, SLOT_OPERATOR);
 }
 
 /* Reverts unless calldata word P is a partition code, 1 .. LANG_PARTITIONS
@@ -735,14 +765,44 @@ static void move_vote(Asm *a) {
   asm_op(a, OP_POP);
 }
 
+/* The log of a move from FROM (push_from) to the calldata word TO of the
+ * word Q. At erc20: Transfer(from, to, q) (O5a), also at q = 0 and at
+ * to = from. At erc721 (O5d, MY CALL 217 (a)): q = 0 writes and logs
+ * nothing; else to >= 2^160 reverts, OWNER := to, APPROVED := 0 and the LOG4
+ * Transfer(from, to, TOKEN_ID). */
+static void move_log(Asm *a, const EntryContext *c, unsigned from, unsigned to, unsigned q) {
+  if (!facade_nft(c)) {
+    asm_argument(a, to);
+    push_from(a, from);
+    asm_argument(a, q);
+    transfer_log(a);
+    return;
+  }
+  Label done = asm_label(a);
+  asm_argument(a, q);
+  asm_op(a, OP_ISZERO);
+  asm_jump_if(a, done);
+  asm_address_guard(a, to);
+  asm_argument(a, to);
+  asm_push(a, SLOT_OWNER);
+  asm_op(a, OP_SSTORE);
+  asm_op(a, OP_PUSH0);
+  asm_push(a, SLOT_APPROVED);
+  asm_op(a, OP_SSTORE);
+  asm_push(a, TOKEN_ID);
+  asm_argument(a, to);
+  push_from(a, from);
+  nft_log(a, "Transfer(address,address,uint256)");
+  asm_jumpdest(a, done);
+}
+
 /* The move of transfer, with h at memory MEM_ID, to the calldata word TO
  * and q the word Q: q > PART[classA][h] reverts; settle h, then settle to
  * (SPEC 5: checkpoints both identities); the vote of q moves from h to to
  * (O2); MU[h] -= q, then MU[to] += q, then PART[classA][h] -= q, then
  * PART[classA][to] += q (each credit read after its debit, so to = h keeps
- * the mass, O4); logs Transfer(h, to, q), also at q = 0 and at to = h
- * (O5a); then move_return. p: push_partition (O4). */
-static void move(Asm *a, unsigned to, unsigned q, unsigned p) {
+ * the mass, O4); then move_log (O5a, O5d). p: push_partition (O4). */
+static void move_body(Asm *a, const EntryContext *c, unsigned to, unsigned q, unsigned p) {
   asm_load(a, MEM_ID);
   push_partition(a, p);
   part_slot(a);
@@ -779,10 +839,12 @@ static void move(Asm *a, unsigned to, unsigned q, unsigned p) {
   part_term(a, OP_SUB, q, p);
   asm_argument(a, to);
   part_term(a, OP_ADD, q, p);
-  asm_argument(a, to);
-  asm_load(a, MEM_ID);
-  asm_argument(a, q);
-  transfer_log(a);
+  move_log(a, c, FROM_CALLER, to, q);
+}
+
+/* move_body, then move_return. */
+static void move(Asm *a, const EntryContext *c, unsigned to, unsigned q, unsigned p) {
+  move_body(a, c, to, q, p);
   move_return(a, FROM_CALLER, to, q, p);
 }
 
@@ -795,7 +857,7 @@ static void transfer(Asm *a, const EntryContext *c) {
   caller_identity(a);
   asm_store(a, MEM_ID);
   restriction_guard(a, c, 0, 1, PART_WORD_NONE);
-  move(a, 0, 1, PART_WORD_NONE);
+  move(a, c, 0, 1, PART_WORD_NONE);
 }
 
 /* transfer(address to, uint256 q) of the ERC-20 facade (O5c, MY CALL 164):
@@ -816,7 +878,7 @@ static void transfer_partition(Asm *a, const EntryContext *c) {
   caller_identity(a);
   asm_store(a, MEM_ID);
   restriction_guard(a, c, 1, 2, 0);
-  move(a, 1, 2, 0);
+  move(a, c, 1, 2, 0);
 }
 
 /* approve(address spender, uint256 v) (O5c, MY CALLs 165 and 167):
@@ -889,7 +951,7 @@ static void transfer_from(Asm *a, const EntryContext *c) {
   asm_op(a, OP_SWAP1);
   asm_op(a, OP_SSTORE);
   restriction_guard(a, c, 1, 2, PART_WORD_NONE);
-  move(a, 1, 2, PART_WORD_NONE);
+  move(a, c, 1, 2, PART_WORD_NONE);
 }
 
 /* Reverts unless (CHARTER, id(CALLER)) is an issuer pair (an unrolled
@@ -950,7 +1012,7 @@ static void attest(Asm *a, const EntryContext *c) {
  * gate it; settle from, then settle to; the vote of q moves from from to
  * to (O2); MU[from] -= q, then MU[to] += q, then PART[classA][from] -= q,
  * then PART[classA][to] += q (each credit read after its debit, so
- * to = from keeps the mass, O4); logs Transfer(from, to, q) (O5a);
+ * to = from keeps the mass, O4); move_log (O5a, O5d);
  * then move_return; w: the first word, p: push_partition (O4). */
 static void recover_move(Asm *a, const EntryContext *c, unsigned w, unsigned p) {
   issuer_guard(a, c);
@@ -999,10 +1061,7 @@ static void recover_move(Asm *a, const EntryContext *c, unsigned w, unsigned p) 
   part_term(a, OP_SUB, w + 2, p);
   asm_argument(a, w + 1);
   part_term(a, OP_ADD, w + 2, p);
-  asm_argument(a, w + 1);
-  asm_argument(a, w);
-  asm_argument(a, w + 2);
-  transfer_log(a);
+  move_log(a, c, w, w + 1, w + 2);
   move_return(a, w, w + 1, w + 2, p);
 }
 
@@ -1205,6 +1264,197 @@ static void charter(Asm *a, const EntryContext *c) {
   asm_return_top(a);
 }
 
+/* The ERC-721 facade (O5d, MY CALLs 214 to 217): the one token id
+ * TOKEN_ID, and the account is the identity, as at the ERC-20 facade. */
+
+/* Reverts unless calldata word J is TOKEN_ID (MY CALL 215 (a)). */
+static void token_guard(Asm *a, unsigned j) {
+  asm_argument(a, j);
+  asm_push(a, TOKEN_ID);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+}
+
+/* -> OWNER. */
+static void push_owner(Asm *a) {
+  asm_push(a, SLOT_OWNER);
+  asm_op(a, OP_SLOAD);
+}
+
+/* Reverts unless the identity at memory MEM_ID is OWNER or an operator of
+ * OWNER (mayMoveNft without the approved identity). */
+static void owner_guard(Asm *a) {
+  Label pass = asm_label(a);
+  asm_load(a, MEM_ID);
+  push_owner(a);
+  asm_op(a, OP_EQ);
+  asm_jump_if(a, pass);
+  asm_load(a, MEM_ID);
+  push_owner(a);
+  operator_slot(a);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_jumpdest(a, pass);
+}
+
+/* The end of an ERC-721 write: RETURN with no data (the ERC-721 functions
+ * are void, MY CALL 217 (a)). */
+static void return_void(Asm *a) {
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_PUSH0);
+  asm_op(a, OP_RETURN);
+}
+
+/* ownerOf(uint256 id) (MY CALLs 215 and 216): id not TOKEN_ID reverts;
+ * OWNER. */
+static void owner_of(Asm *a, const EntryContext *c) {
+  (void)c;
+  token_guard(a, 0);
+  push_owner(a);
+  asm_return_top(a);
+}
+
+/* balanceOf(address h) of the ERC-721 facade (MY CALL 216 (a)):
+ * h >= 2^160 or h = 0 reverts; MU[h], 0 or 1. */
+static void balance_nft(Asm *a, const EntryContext *c) {
+  asm_address_guard(a, 0);
+  asm_argument(a, 0);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  mass(a, c);
+}
+
+/* getApproved(uint256 id): id not TOKEN_ID reverts; APPROVED. */
+static void get_approved(Asm *a, const EntryContext *c) {
+  (void)c;
+  token_guard(a, 0);
+  asm_push(a, SLOT_APPROVED);
+  asm_op(a, OP_SLOAD);
+  asm_return_top(a);
+}
+
+/* approve(address to, uint256 id) of the ERC-721 facade (MY CALL 217 (a)):
+ * id not TOKEN_ID or to >= 2^160 reverts; id(CALLER) is OWNER or an
+ * operator of OWNER, else revert; APPROVED := to (to = 0 clears); logs
+ * Approval(OWNER, to, TOKEN_ID) (LOG4). */
+static void approve_nft(Asm *a, const EntryContext *c) {
+  (void)c;
+  token_guard(a, 1);
+  asm_address_guard(a, 0);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  owner_guard(a);
+  asm_argument(a, 0);
+  asm_push(a, SLOT_APPROVED);
+  asm_op(a, OP_SSTORE);
+  asm_push(a, TOKEN_ID);
+  asm_argument(a, 0);
+  push_owner(a);
+  nft_log(a, "Approval(address,address,uint256)");
+  return_void(a);
+}
+
+/* setApprovalForAll(address op, bool b) (MY CALL 217 (a)): op >= 2^160,
+ * op = 0 or b > 1 reverts; OPERATOR[id(CALLER)][op] := b; logs
+ * ApprovalForAll(id(CALLER), op, b) (LOG3, b in the data). */
+static void set_approval_for_all(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_address_guard(a, 0);
+  asm_argument(a, 0);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  asm_push(a, 1);
+  asm_argument(a, 1);
+  asm_op(a, OP_GT);
+  asm_revert_if(a);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  operator_slot(a);
+  asm_op(a, OP_SSTORE);
+  asm_argument(a, 0);
+  asm_load(a, MEM_ID);
+  asm_argument(a, 1);
+  erc20_log(a, "ApprovalForAll(address,address,bool)");
+  return_void(a);
+}
+
+/* isApprovedForAll(address owner, address op): owner >= 2^160 or
+ * op >= 2^160 reverts; OPERATOR[owner][op]. */
+static void is_approved_for_all(Asm *a, const EntryContext *c) {
+  (void)c;
+  asm_address_guard(a, 0);
+  asm_address_guard(a, 1);
+  asm_argument(a, 1);
+  asm_argument(a, 0);
+  operator_slot(a);
+  asm_op(a, OP_SLOAD);
+  asm_return_top(a);
+}
+
+/* transferFrom(address from, address to, uint256 id) of the ERC-721 facade
+ * (MY CALL 217 (a), transferNft): id not TOKEN_ID, from >= 2^160 or
+ * to >= 2^160 reverts; from not OWNER reverts; to = 0 or to + 1 overflow
+ * reverts; id(CALLER) is APPROVED, OWNER or an operator of OWNER, else
+ * revert; then R (classA) from the profile of from to the profile of to,
+ * and move_body of the one unit from from to to (OWNER := to,
+ * APPROVED := 0, the LOG4 Transfer). */
+static void transfer_from_nft(Asm *a, const EntryContext *c) {
+  Label pass = asm_label(a);
+  token_guard(a, 2);
+  asm_address_guard(a, 0);
+  asm_address_guard(a, 1);
+  asm_argument(a, 0);
+  push_owner(a);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ISZERO);
+  asm_revert_if(a);
+  destination_guard(a, 1);
+  caller_identity(a);
+  asm_store(a, MEM_ID);
+  asm_load(a, MEM_ID);
+  asm_push(a, SLOT_APPROVED);
+  asm_op(a, OP_SLOAD);
+  asm_op(a, OP_EQ);
+  asm_jump_if(a, pass);
+  owner_guard(a);
+  asm_jumpdest(a, pass);
+  asm_argument(a, 0);
+  asm_store(a, MEM_ID);
+  restriction_guard(a, c, 1, 2, PART_WORD_NONE);
+  move_body(a, c, 1, 2, PART_WORD_NONE);
+  return_void(a);
+}
+
+/* supportsInterface(bytes4 id) (ERC-165, MY CALL 214 (a)): a word with a
+ * byte other than 0 after its 4 high bytes reverts; 1 for 0x01ffc9a7
+ * (ERC-165) and 0x80ac58cd (ERC-721), else 0. */
+static void supports_interface(Asm *a, const EntryContext *c) {
+  (void)c;
+  unsigned char low[WORD];
+  memset(low, 0xff, sizeof low);
+  memset(low, 0, 4);
+  asm_push_word(a, low);
+  asm_argument(a, 0);
+  asm_op(a, OP_AND);
+  asm_revert_if(a);
+  asm_argument(a, 0);
+  asm_push(a, 224);
+  asm_op(a, OP_SHR);
+  asm_op(a, OP_DUP1);
+  asm_push(a, 0x01ffc9a7);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_SWAP1);
+  asm_push(a, 0x80ac58cd);
+  asm_op(a, OP_EQ);
+  asm_op(a, OP_ADD);
+  asm_return_top(a);
+}
+
 /* reserve kind: RESERVE[kind]; a kind code above 1 reverts. */
 static void reserve(Asm *a, const EntryContext *c) {
   (void)c;
@@ -1367,10 +1617,52 @@ static const Entry debreu_token[] = {
   {"recoverByPartition", 4, 0, ENTRY_NONPAYABLE, recover_partition, "bytes32,address,address,uint256"},
 };
 
-/* The table of REGIME: the token table when the program data selects the
- * token asset (O5b), else the wei table. */
+/* The ERC-721 facade (O5d, MY CALL 214 (a)): the 14 native rows, vote, the
+ * 4 ERC-1400 rows and the ERC-721 rows. Wei mode only: lang_data refuses
+ * the token asset and the impossibility regime at erc721. The 2
+ * safeTransferFrom rows are not in this table yet. */
+static const Entry debreu_erc721[] = {
+  {"deposit", 1, 0, ENTRY_PAYABLE, deposit, NULL},
+  {"distribute", 1, 0, ENTRY_NONPAYABLE, distribute, NULL},
+  {"withdraw", 0, 0, ENTRY_NONPAYABLE, withdraw, NULL},
+  {"transfer", 2, 0, ENTRY_NONPAYABLE, transfer, NULL},
+  {"attest", 3, 0, ENTRY_NONPAYABLE, attest, NULL},
+  {"recover", 3, 0, ENTRY_NONPAYABLE, recover, NULL},
+  {"cast", 0, 1, ENTRY_NONPAYABLE, lang_entry_cast, NULL},
+  {"amend", 0, 0, ENTRY_NONPAYABLE, amend, NULL},
+  {"mass", 1, 0, ENTRY_NONPAYABLE, mass, NULL},
+  {"supply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+  {"claimOf", 1, 0, ENTRY_NONPAYABLE, claim, NULL},
+  {"charter", 0, 0, ENTRY_NONPAYABLE, charter, NULL},
+  {"reserve", 1, 0, ENTRY_NONPAYABLE, reserve, NULL},
+  {"selfConstituting", 0, 0, ENTRY_NONPAYABLE, self_debreu, NULL},
+  {"vote", 1, 0, ENTRY_NONPAYABLE, vote, NULL},
+  {"balanceOfByPartition", 2, 0, ENTRY_NONPAYABLE, mass_partition, "bytes32,address"},
+  {"totalSupplyByPartition", 1, 0, ENTRY_NONPAYABLE, supply_partition, "bytes32"},
+  {"transferByPartition", 3, 0, ENTRY_NONPAYABLE, transfer_partition, "bytes32,address,uint256,bytes"},
+  {"recoverByPartition", 4, 0, ENTRY_NONPAYABLE, recover_partition, "bytes32,address,address,uint256"},
+  {"balanceOf", 1, 0, ENTRY_NONPAYABLE, balance_nft, "address"},
+  {"ownerOf", 1, 0, ENTRY_NONPAYABLE, owner_of, "uint256"},
+  {"approve", 2, 0, ENTRY_NONPAYABLE, approve_nft, "address,uint256"},
+  {"getApproved", 1, 0, ENTRY_NONPAYABLE, get_approved, "uint256"},
+  {"setApprovalForAll", 2, 0, ENTRY_NONPAYABLE, set_approval_for_all, "address,bool"},
+  {"isApprovedForAll", 2, 0, ENTRY_NONPAYABLE, is_approved_for_all, "address,address"},
+  {"transferFrom", 3, 0, ENTRY_NONPAYABLE, transfer_from_nft, "address,address,uint256"},
+  {"supportsInterface", 1, 0, ENTRY_NONPAYABLE, supports_interface, "bytes4"},
+  {"name", 0, 0, ENTRY_NONPAYABLE, erc20_name, NULL},
+  {"symbol", 0, 0, ENTRY_NONPAYABLE, erc20_symbol, NULL},
+  {"totalSupply", 0, 0, ENTRY_NONPAYABLE, supply, NULL},
+};
+
+/* The table of REGIME: the ERC-721 table when the program data selects the
+ * erc721 facade (O5d), else the token table when it selects the token
+ * asset (O5b), else the wei table. */
 const Entry *lang_domain_entries(LangRegime regime, const EntryContext *c, size_t *count) {
   int token = c != NULL && c->data != NULL && c->data->asset == LANG_ASSET_TOKEN;
+  if (facade_nft(c) && regime == LANG_REGIME_DEBREU) {
+    *count = sizeof debreu_erc721 / sizeof debreu_erc721[0];
+    return debreu_erc721;
+  }
   switch (regime) {
     case LANG_REGIME_IMPOSSIBILITY:
       *count = token ? sizeof impossibility_token / sizeof impossibility_token[0]
@@ -1409,8 +1701,28 @@ static void store_part(Asm *a, unsigned p, unsigned long long key, unsigned long
   asm_op(a, OP_SSTORE);
 }
 
-/* The genesis event of identity h with units: Transfer(0, h, units) (O5a). */
-static void genesis_log(Asm *a, unsigned long long identity, unsigned long long units) {
+/* The genesis of the ERC-721 facade (O5d, MY CALL 217 (a)): OWNER := h,
+ * the identity with MU = 1, and the LOG4 Transfer(0, h, TOKEN_ID). */
+static void owner_genesis(Asm *a, unsigned long long identity) {
+  unsigned char word[WORD];
+  word_of(word, identity, 0);
+  asm_push_word(a, word);
+  asm_push(a, SLOT_OWNER);
+  asm_op(a, OP_SSTORE);
+  asm_push(a, TOKEN_ID);
+  asm_push_word(a, word);
+  asm_op(a, OP_PUSH0);
+  nft_log(a, "Transfer(address,address,uint256)");
+}
+
+/* The genesis event of identity h with units: Transfer(0, h, units) (O5a),
+ * or owner_genesis at erc721. */
+static void genesis_log(Asm *a, const LangDomainData *data, unsigned long long identity,
+                        unsigned long long units) {
+  if (data->facade == LANG_FACADE_ERC721) {
+    owner_genesis(a, identity);
+    return;
+  }
   unsigned char word[WORD];
   word_of(word, identity, 0);
   asm_push_word(a, word);
@@ -1456,7 +1768,9 @@ static void carrier_genesis(Asm *a) {
 /* The genesis writes: in token mode first CARRIER := the constructor word
  * (carrier_genesis); CHARTER := start; per row REGISTRY[w] := h + 1; per
  * distinct identity h, MU[h] := the sum of its units and PROFILE[h] := the
- * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a);
+ * profile of its last row; each MU write logs Transfer(0, h, MU[h]) (O5a),
+ * or at erc721 writes OWNER := h and logs the LOG4 Transfer(0, h, TOKEN_ID)
+ * (O5d);
  * per distinct identity h and partition p, PART[p][h] := the sum of its
  * units in p (O4). Zero words are not written. */
 void lang_domain_genesis(Asm *a, const LangContract *contract) {
@@ -1484,7 +1798,7 @@ void lang_domain_genesis(Asm *a, const LangContract *contract) {
     }
     if (units != 0) {
       store_entry(a, SLOT_MU, row->identity, units, 0);
-      genesis_log(a, row->identity, units);
+      genesis_log(a, data, row->identity, units);
     }
     for (unsigned p = 1; p <= LANG_PARTITIONS; p++) {
       unsigned long long part = 0;

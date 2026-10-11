@@ -68,6 +68,11 @@ WRITE_FACADE = ('transfer(address,uint256)', 'approve(address,uint256)', 'allowa
                 'transferFrom(address,address,uint256)')
 # The ERC-20 metadata views (O5c B2): entries of every table, in both regimes.
 METADATA = ('name()', 'symbol()', 'decimals()')
+# The facade entries of the erc721 facade (O5d B2, MY CALL 214): the ERC-721 entries, and name and
+# symbol (no decimals). balanceOf and totalSupply are Debreu entries.
+NFT_FACADE = ('ownerOf(uint256)', 'approve(address,uint256)', 'getApproved(uint256)', 'setApprovalForAll(address,bool)',
+              'isApprovedForAll(address,address)', 'transferFrom(address,address,uint256)', 'supportsInterface(bytes4)',
+              'name()', 'symbol()')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -128,7 +133,7 @@ IMPOSSIBILITY = Program(
      'selfConstituting', 'balanceOf', 'totalSupply'), 0)
 # examples/erc721-dirac.lang: one unit (S = 1) at identity 1; restricted admits an accredited
 # receiver only (the profile code is 2 juris + status, so the odd codes). The def `facade` is
-# erc721 (O5d B1, MY CALL 224); the code data ignores it until B2.
+# erc721 (O5d B1, MY CALL 224); the code data gives the ERC-721 table (O5d B2).
 ERC721 = Program(
     'erc721', st.ROOT / 'examples/erc721-dirac.lang', 1, ((4096, 1, 0, 1, 1), (4097, 2, 3, 0, 1), (4098, 3, 0, 0, 1)),
     (('a',) * 16, ('d', 'a') * 8, ('d',) * 16), ('pp', 'pp', 'rr'), ((1, 1), (2, 1)), DEBREU.entries, 1,
@@ -150,7 +155,9 @@ class State:
     the senders (the balance of the contract is BALANCE); in wei mode TOKEN is None.
     ALLOWANCE maps an (owner, spender) identity pair to its allowance (O5c). BALLOT maps an
     identity to its code (0 = no ballot) and WEIGHT a code to the mass of its voters (O2).
-    PART maps a (partition, identity) pair to its units (O4); the moves use CLASS_A."""
+    PART maps a (partition, identity) pair to its units (O4); the moves use CLASS_A. OWNER and
+    APPROVED are the words of the erc721 facade (O5d B2): the identity of the one unit and the
+    approved identity."""
     mu: dict
     registry: dict
     profile: dict
@@ -167,6 +174,8 @@ class State:
     ballot: dict = dataclasses.field(default_factory=dict)
     weight: dict = dataclasses.field(default_factory=dict)
     part: dict = dataclasses.field(default_factory=dict)
+    owner: int = 0
+    approved: int = 0
 
 
 # The partition of the moves and of recover (O4 B2: PART_DEFAULT of domain/entries.c), and
@@ -182,7 +191,8 @@ def genesis(program):
         mu[h] = mu.get(h, 0) + u
         profile[h] = p
         part[code, h] = part.get((code, h), 0) + u
-    s = State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0, part=part)
+    owner = next((h for h, u in mu.items() if u), 0) if program.facade else 0
+    s = State(mu, registry, profile, program.start, (0, 0), 0, {}, {}, 0, part=part, owner=owner)
     held = {key: value for w, balance, allowed in FUNDS
             for key, value in ((slot(0, w), balance), (st.allowance(w, HERE), allowed))}
     return dataclasses.replace(s, carrier=int(st.TOKEN, 16), token=held) if program.token else s
@@ -191,6 +201,7 @@ def genesis(program):
 def storage(s):
     """The storage words of state S (zero words left out)."""
     words = {CHARTER: s.charter, INDEX: s.index, DUST: s.dust, CARRIER: s.carrier,
+             st.OWNER: s.owner, st.APPROVED: s.approved,
              **{slot(MU, h): u for h, u in s.mu.items()},
              **{slot(REGISTRY, w): v for w, v in s.registry.items()},
              **{slot(PROFILE, h): p for h, p in s.profile.items()},
@@ -298,7 +309,7 @@ def send(program, s, h, to, q, p=CLASS_A):
     code = table[s.charter - 1][s.profile.get(h, 0) * 4 + s.profile.get(to, 0)]
     if to == 0 or to + 1 >= WORD or not admits(code, q) or q > s.part.get((p, h), 0):
         return None
-    return move(s, h, to, q, p)
+    return move(s, h, to, q, p, program.facade)
 
 
 def transfer_by_partition(program, s, sender, value, p, to, q, *tail):
@@ -341,10 +352,14 @@ def allowance_view(program, s, sender, value, o, p):
     return None if max(o, p) >= 2**160 else (s, s.allowance.get((o, p), 0))
 
 
-def move(s, h, to, q, p=CLASS_A):
+def move(s, h, to, q, p=CLASS_A, facade=False):
     """Settles h, then to; then debit h q ; credit to q (the credit reads the debited mu); the
     vote of q moves from the ballot of h to the ballot of to (O2); then the same debit and
-    credit of PART[p] (O4 B2: classA; O4 B3: the partition p)."""
+    credit of PART[p] (O4 B2: classA; O4 B3: the partition p). At the erc721 facade (O5d B2,
+    transferNft) a nonzero move requires to < 2**160, then sets OWNER := to and APPROVED := 0;
+    q = 0 writes neither."""
+    if facade and q and to >= 2**160:
+        return None
     first = settle(s, h)
     second = None if first is None else settle(first, to)
     if second is None:
@@ -352,8 +367,9 @@ def move(s, h, to, q, p=CLASS_A):
     debited = {**second.mu, h: second.mu.get(h, 0) - q}
     weight = shift(second.weight, second.ballot.get(h, 0), second.ballot.get(to, 0), q)
     taken = {**second.part, (p, h): second.part.get((p, h), 0) - q}
+    nft = dict(owner=to, approved=0) if facade and q else {}
     return dataclasses.replace(second, mu={**debited, to: debited.get(to, 0) + q}, weight=weight,
-                               part={**taken, (p, to): taken.get((p, to), 0) + q}), 1
+                               part={**taken, (p, to): taken.get((p, to), 0) + q}, **nft), 1
 
 
 def issuer(program, s, sender):
@@ -376,7 +392,7 @@ def recover(program, s, sender, value, h, to, q, p=CLASS_A):
     if (not issuer(program, s, sender) or 0 in (h, to) or h + 1 >= WORD or to + 1 >= WORD
             or q > s.part.get((p, h), 0)):
         return None
-    return move(s, h, to, q, p)
+    return move(s, h, to, q, p, program.facade)
 
 
 def recover_by_partition(program, s, sender, value, p, h, to, q):
@@ -432,7 +448,8 @@ def view(name):
                    claimOf=lambda h: claim(s, h), charter=lambda: s.charter,
                    reserve=lambda kind: s.reserve[kind] if kind < 2 else None,
                    selfConstituting=lambda: program.constituting,
-                   balanceOf=lambda h: s.mu.get(h, 0), totalSupply=lambda: program.supply,
+                   balanceOf=lambda h: None if program.facade and not 0 < h < 2**160 else s.mu.get(h, 0),
+                   totalSupply=lambda: program.supply,
                    balanceOfByPartition=lambda p, h: s.part.get((p, h), 0) if p in PARTITIONS else None,
                    totalSupplyByPartition=lambda p: (sum(row[3] for row in program.genesis if row[4] == p)
                                                      if p in PARTITIONS else None))[name](*args)
@@ -490,22 +507,30 @@ def check_step(label, program, runtime, s, chain, call):
                    else (actual['storage'], held.get(slot(0, HERE), 0), held))
 
 
+def move_logs(program, h, to, q):
+    """The Transfer records of a move of q from h to to (O5a). At the erc721 facade (O5d B2) a
+    move of q = 1 logs the LOG4 Transfer(h, to, TOKEN_ID) and a move of q = 0 logs none."""
+    return ([st.nft_log(h, to)] if q else []) if program.facade else [st.transfer_log(h, to, q)]
+
+
 def records(program, s, call, model):
     """The records of CALL from S: a successful transfer logs Transfer(h, to, q) and a
     successful recover logs Transfer(from, to, q) (O5a); the ERC-20 transfer and transferFrom
     log as transfer and recover, and approve logs Approval(owner, spender, v) (O5c); a successful
     withdraw logs Paid(h, wallet, paid, moved) (O11); a successful transferByPartition or
     recoverByPartition logs Transfer, then TransferByPartition(p, operator, from, to, q) (O4 B3);
-    a revert or any other entry logs none."""
+    a revert or any other entry logs none. move_logs gives the Transfer records of a move, and
+    TransferByPartition is logged also when the erc721 facade logs no Transfer (O5d B2)."""
     name, args, sender, value = call
     moves = dict(transfer=lambda to, q: (identity(s, sender), to, q), recover=lambda h, to, q: (h, to, q),
                  erc20Transfer=lambda to, q: (identity(s, sender), to, q), transferFrom=lambda h, to, q: (h, to, q))
     parted = dict(transferByPartition=lambda p, to, q, *tail: (p, sender, identity(s, sender), to, q),
                   recoverByPartition=lambda p, h, to, q: (p, sender, h, to, q))
     if model and name in moves:
-        return [st.transfer_log(*moves[name](*args))]
+        return move_logs(program, *moves[name](*args))
     if model and name in parted:
-        return st.partition_logs(*parted[name](*args))
+        p, operator, h, to, q = parted[name](*args)
+        return move_logs(program, h, to, q) + st.partition_logs(p, operator, h, to, q)[1:]
     if model and name == 'approve':
         return [st.approval_log(identity(s, sender), *args)]
     if model and name == 'withdraw':
@@ -518,9 +543,10 @@ def records(program, s, call, model):
 def fold(measure, logs, minted=False):
     """MEASURE after the Transfer records of LOGS (the Paid records are left out): each record
     debits its source and credits its target by its value; a genesis record (MINTED) only
-    credits its target."""
+    credits its target. The LOG4 Transfer of the erc721 facade has no data: its value is 1 (O5d B2)."""
     def step(mu, record):
-        source, target, q = (int(word, 16) for word in (*record[1][1:], record[2]))
+        source, target = (int(word, 16) for word in record[1][1:3])
+        q = int(record[2], 16) if record[2] else 1
         debited = mu if minted else {**mu, source: mu.get(source, 0) - q}
         return {**debited, target: debited.get(target, 0) + q}
     return functools.reduce(step, [record for record in logs if record[1][0] == st.topic0()], measure)
@@ -966,7 +992,7 @@ def selector_checks(program, runtime, s):
     """The selector table is the entry list exactly; each forbidden call reverts and the
     state does not change; each required call gives the model result."""
     table = selector_table(runtime)
-    facade = (WRITE_FACADE if 'transfer' in program.entries else ()) + METADATA
+    facade = NFT_FACADE if program.facade else (WRITE_FACADE if 'transfer' in program.entries else ()) + METADATA
     wanted = ({st.selector(name, WORDS[name], st.SIGNATURES.get(name)) for name in program.entries}
               | {st.selector(signature.split('(')[0], 0, signature) for signature in facade})
     require(table == wanted, f'{program.name}: selector table {sorted(table)} != entries {sorted(wanted)}')
@@ -1010,15 +1036,16 @@ def dirac_vectors(program, runtime):
 def identity_boundaries(program, runtime):
     """Only encodable identities can receive units; the largest valid one can withdraw."""
     one, recipient = wallet(4096), wallet(4100)
+    last = 2**160 - 1 if program.facade else WORD - 2
     calls = (('transfer', (WORD - 1, 0), one, 0, None),
              ('transfer', (WORD - 1, 1), one, 0, None),
              ('attest', (4100, WORD - 1, 0), one, 0, None),
-             ('attest', (4100, WORD - 2, 0), one, 0, 1),
-             ('transfer', (WORD - 2, 1), one, 0, 1),
-             ('mass', (WORD - 2,), SENDER, 0, 1),
+             ('attest', (4100, last, 0), one, 0, 1),
+             ('transfer', (last, 1), one, 0, 1),
+             ('mass', (last,), SENDER, 0, 1),
              ('deposit', (0,), SENDER, 9, 9),
              ('distribute', (0,), SENDER, 0, 9),
-             ('claimOf', (WORD - 2,), SENDER, 0, 9),
+             ('claimOf', (last,), SENDER, 0, 9),
              ('withdraw', (), recipient, 0, 9),
              ('withdraw', (), recipient, 0, 0))
     s, chain = genesis(program), at(genesis(program))
@@ -1027,7 +1054,7 @@ def identity_boundaries(program, runtime):
         model = apply(program, s, call)
         require((model[1] if model else None) == want, f'identity-{number}: unexpected model result')
         s, chain = check_step(f'identity-{number}', program, runtime, s, chain, call)
-    require(sum(s.mu.values()) == program.supply and s.balance == 0 and claim(s, WORD - 2) == 0,
+    require(sum(s.mu.values()) == program.supply and s.balance == 0 and claim(s, last) == 0,
             'identity: the recipient did not retain the unit and withdraw its complete claim')
     return len(calls)
 
@@ -1038,9 +1065,10 @@ def load(program):
             f'{program.name}: interestc data {text!r} != claims.py tables {program.data_text()!r}')
     word = f'{int(st.TOKEN, 16):064x}' if program.token else ''
     holder = (st.TOKEN, st.token_code('standard'), {}) if program.token else None
-    runtime = st.program_code('claims-' + program.name, program.path, suffix=word, token=holder)
+    runtime = st.program_code('claims-' + program.name, program.path, suffix=word, token=holder, nft=program.facade)
     carrier = {CARRIER: int(st.TOKEN, 16)} if program.token else {}
-    require(storage(genesis(program)) == st.data_storage(program.path) | carrier,
+    owner = {st.OWNER: h for h, _ in st.data_logs(program.path)} if program.facade else {}
+    require(storage(genesis(program)) == st.data_storage(program.path) | carrier | owner,
             f'{program.name}: the model genesis is not the deployed genesis')
     verdicts = st.interestc('verdicts', program.path, 'F').strip() if 'cast' in program.entries else ''
     return dataclasses.replace(program, verdicts=verdicts), runtime

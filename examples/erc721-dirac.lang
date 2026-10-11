@@ -1,8 +1,9 @@
 def members : Nat := 3
 -- ERC-721 as a Dirac measure (host README, The domain).  The supply S is 1:
--- one unit, at one identity, that moves whole.  The ownership model of
--- ERC-721 and not its ABI: mass h = 1 tells the owner.  The regime is
--- Arrow-Debreu (transfer is an Arrow-Debreu entry).
+-- one unit, at one identity, that moves whole.  Mass h = 1 tells the
+-- owner, and the `facade` def below gives the ERC-721 ABI of the one
+-- token id 1 (ownerOf, approve, transferFrom and the other entries).  The
+-- regime is Arrow-Debreu (transfer is an Arrow-Debreu entry).
 -- `H` is a veto rule: one frozen ballot freezes the token; else
 -- `restricted` wins only by a strict majority over `open`.  `c` is the
 -- count triple (open, restricted, frozen).
