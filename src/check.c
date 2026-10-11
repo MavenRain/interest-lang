@@ -1723,9 +1723,25 @@ static void data_erc721(LangChecked *c, const LangDomainData *data) {
     refuse(c, "CONTRACT_VALUE", "facade", "is erc721 and the regime is impossibility");
 }
 
+/* The quorum (O2b, MY CALL 238 (a)): 1 <= q <= S and the regime is
+ * Arrow-Debreu, else QUORUM_LIMIT. Absent: q = 1 (lang_data). */
+static void data_quorum(LangChecked *c, unsigned long long q, LangDomainData *data) {
+  unsigned long long units = 0;
+  for (size_t i = 0; i < data->holders; i++)
+    units += data->holder[i].units;
+  if (!c->failed && q == 0)
+    refuse(c, "QUORUM_LIMIT", "quorum", "is 0");
+  if (!c->failed && q > units)
+    refuse(c, "QUORUM_LIMIT", "quorum", "is above the supply S");
+  if (!c->failed && c->regime == LANG_REGIME_IMPOSSIBILITY)
+    refuse(c, "QUORUM_LIMIT", "quorum", "is a def and the regime is impossibility");
+  data->quorum = c->failed ? 1 : q;
+}
+
 int lang_data(LangChecked *c, LangDomainData *data) {
   memset(data, 0, sizeof *data);
   data->start = 1;
+  data->quorum = 1;
   text_set(&data->name, LANG_NAME_DEFAULT);
   text_set(&data->symbol, LANG_SYMBOL_DEFAULT);
   if (c->failed)
@@ -1759,6 +1775,9 @@ int lang_data(LangChecked *c, LangDomainData *data) {
   Value *genesis = data_def(c, "genesis", data_type(c, "Holders"));
   if (genesis != NULL)
     data_genesis(c, genesis, data);
+  Value *quorum = data_def(c, "quorum", data_type(c, "Nat"));
+  if (quorum != NULL)
+    data_quorum(c, data_nat(c, quorum, "quorum"), data);
   Value *restrict_ = data_def(c, "restrict", data_arrow(c, data_type(c, "Partition"),
                                                         data_arrow(c, ctype, data_type(c, "Restriction"))));
   static const char *const partitions[LANG_PARTITIONS] = {"classA", "classB"};

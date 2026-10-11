@@ -638,7 +638,12 @@ def debreu_example_cases():
              ('amend-weighted', data('amend'), weighted, {**weighted, CHARTER: seated[(1, 1, 2)]},
               seated[(1, 1, 2)], 0, SENDER),
              ('amend-hamilton', data('amend'), hamilton, {**hamilton, CHARTER: seated[(1, 1, 3)]},
-              seated[(1, 1, 3)], 0, SENDER)]
+              seated[(1, 1, 3)], 0, SENDER),
+             # The quorum (O2b B2, MY CALL 238 (a)): the def quorum is 6 of S = 10. Identity 1 alone
+             # (W = 5) reverts; identities 1 and 2 (W = 10, the tally (5, 5, 0)) give the seats (2, 1, 0).
+             ('amend-below-quorum', data('amend'), {**base, b1: 1, w1: 5}, None, None, 0, SENDER),
+             ('amend-quorum-met', data('amend'), voted, {**voted, CHARTER: seated[(1, 1, 2)]},
+              seated[(1, 1, 2)], 0, SENDER)]
     return table_cases('example-debreu', runtime, rows) + accrual_cases(runtime, base)
 
 

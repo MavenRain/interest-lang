@@ -1,7 +1,7 @@
 /* The program data of interestc (SPEC section 7, I3 plan MY CALLs 11-12):
  * the start charter, the genesis rows, the charter tables and the asset,
  * read from the optional program defs start, genesis, restrict, waterfall,
- * issuers, asset, facade, name and symbol.
+ * issuers, asset, facade, name, symbol and quorum.
  * src/evm.h declares LangDomainData, and the domain defines it here (host
  * README, The domain). lang_data (src/check.c) reads it, and the hooks
  * lang_domain_read and lang_domain_print (domain/entries.c) give it to the
@@ -39,10 +39,11 @@ struct LangDomainData {
   LangAsset asset;             /* the def asset; absent: wei */
   LangFacade facade;           /* the def facade; absent: erc20 */
   LangText name, symbol;       /* the defs name and symbol; absent: the defaults */
+  unsigned long long quorum;   /* the def quorum, 1 .. S at Arrow-Debreu (O2b); absent: 1 */
 };
 /* The reader of lang_domain_read: the optional program defs start, genesis,
- * restrict, waterfall, issuers, asset, facade, name and symbol, read by name and exact
- * type over the finite tables above; the defaults when a def is absent.
- * Errors: CONTRACT_TYPE, CONTRACT_VALUE, CONTRACT_GENESIS. */
+ * restrict, waterfall, issuers, asset, facade, name, symbol and quorum, read by name
+ * and exact type over the finite tables above; the defaults when a def is absent.
+ * Errors: CONTRACT_TYPE, CONTRACT_VALUE, CONTRACT_GENESIS, QUORUM_LIMIT. */
 int lang_data(LangChecked *checked, LangDomainData *data);
 #endif

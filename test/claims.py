@@ -107,6 +107,7 @@ class Program:
     erc20_name: str = 'interest'
     erc20_symbol: str = 'INT'
     classb: tuple = ()
+    quorum: int = 1
 
     @property
     def supply(self):
@@ -123,7 +124,8 @@ class Program:
             'issuers ' + ' '.join(f'{c}:{h}' for c, h in self.issuers),
             f'name {self.erc20_name}', f'symbol {self.erc20_symbol}']
                          + (['asset token'] if self.token else [])
-                         + (['facade erc721'] if self.facade else [])) + '\n'
+                         + (['facade erc721'] if self.facade else [])
+                         + ([f'quorum {self.quorum}'] if self.quorum != 1 else [])) + '\n'
 
 
 # examples/arrow-debreu.lang: restrict open any, restricted upTo 4, frozen deny; wallet 4098
@@ -134,7 +136,7 @@ DEBREU = Program(
     ('deposit', 'distribute', 'withdraw', 'transfer', 'attest', 'recover', 'cast', 'amend', 'vote', 'mass',
      'supply', 'claimOf', 'charter', 'reserve', 'selfConstituting', 'balanceOf', 'totalSupply',
      'balanceOfByPartition', 'totalSupplyByPartition', 'transferByPartition', 'recoverByPartition'), 1,
-    erc20_name='Arrow-Debreu', erc20_symbol='AD', classb=(('d', 'a') * 8, ('d', 'u4') * 8, ('d',) * 16))
+    erc20_name='Arrow-Debreu', erc20_symbol='AD', classb=(('d', 'a') * 8, ('d', 'u4') * 8, ('d',) * 16), quorum=6)
 # examples/arrow-impossibility.lang: no aggregation, so no distribute, transfer, cast, amend.
 IMPOSSIBILITY = Program(
     'impossibility', st.IMPOSSIBILITY, 1, ((4096, 1, 0, 5, 1), (4097, 2, 0, 0, 1)),
@@ -150,7 +152,7 @@ ERC721 = Program(
     facade=True)
 # examples/arrow-debreu-token.lang: the Debreu tables with the ERC-20 carrier (O5b), and no
 # `name` or `symbol` def (the defaults, O5c), and every wallet in partition 1.
-DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True,
+DEBREU_TOKEN = dataclasses.replace(DEBREU, name='debreu-token', path=st.DEBREU_TOKEN, token=True, quorum=1,
                                    erc20_name='interest', erc20_symbol='INT', classb=(),
                                    genesis=((4096, 1, 0, 5, 1), (4097, 2, 3, 3, 1), (4098, 2, 3, 2, 1)))
 # The allowance run (O5c B3, MY CALL 171): the Debreu tables, and the write facade as model entries.
@@ -505,9 +507,9 @@ def seats(weight):
 
 
 def amend(program, s, sender, value):
-    """amend() (O2): active charter := the verdict of the seat vector; W = 0 reverts; mu, the
-    ballots and the treasury do not move."""
-    held = seats(s.weight)
+    """amend() (O2): active charter := the verdict of the seat vector; W < q reverts (O2b; q = 1
+    without a def quorum, so W = 0); mu, the ballots and the treasury do not move."""
+    held = seats(s.weight) if sum(s.weight.get(c, 0) for c in (1, 2, 3)) >= program.quorum else None
     v = None if held is None else verdict(program, tuple(c for c, n in zip((1, 2, 3), held) for _ in range(n)))
     return None if v is None else (dataclasses.replace(s, charter=v), v)
 

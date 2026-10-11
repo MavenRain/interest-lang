@@ -220,6 +220,7 @@ wallet, and the identity can have more than one wallet.
 | `TABLE_DECISION`, `TABLE_STUCK`, `TABLE_LIMIT` | D is not a valid decision space, the rule does not reduce at a tally, or too many members or tallies |
 | `VERDICT_TYPE`, `VERDICT_LIMIT` | `NAME` is not a ChoiceRule, or k^n is more than 59049 |
 | `CONTRACT_TYPE`, `CONTRACT_VALUE`, `CONTRACT_GENESIS` | A program-data definition has the wrong type or value, or the genesis list is invalid (including a repeated wallet) |
+| `QUORUM_LIMIT` | The def `quorum` is 0, is above the supply S, or is in a program with the regime impossibility |
 | `EVM_LIMIT`, `EVM_TABLE`, `EVM_SIZE` | Too many members for the verdict table, a bad verdict table, or too much code, too many jump label sites or a too long entry signature |
 | `EVM_INTERNAL`, `EVM_USAGE`, `EVM_IO` | A writer fault, a bad writer call, or an output error |
 | `MEMORY`, `IO_READ`, `IO_SIZE`, `IO_WRITE`, `USAGE`, `TYPE_INTERNAL` | Arena full, file errors, bad arguments, checker fault |

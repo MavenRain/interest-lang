@@ -105,6 +105,13 @@ def has a maximum of 32 bytes. If not, the check refuses the program with
 `CONTRACT_VALUE`. If a def is absent, the name is "interest" and the
 symbol is "INT".
 
+The optional def `quorum : Nat` gives the quorum q in mass units (O2b,
+MY CALL 238): `amend()` reverts when the WEIGHT sum is below q. If the def
+is absent, q is 1. The check refuses the program with `QUORUM_LIMIT` when
+q is 0, when q is above the supply S (the sum of the genesis units), or
+when the regime is impossibility. The verb `data` gives the line
+`quorum q` only when q is not 1.
+
 A program that does not check is refused with a `TYPE_`, `LEX_` or `PARSE_`
 code (`docs/host/README.md`, section Refusals). A refusal is one line on
 stderr, `interestc: CODE: DEF: message`, and exit 1. A usage or IO error exits 2.
@@ -408,7 +415,8 @@ the overflow guards, the mapping slots, the tally and the verdict-table read.
   and `recoverByPartition`, and classA for `transfer`, `transferFrom` and
   `recover`; `mass h` and MU[h] remain the total across both partitions.
   `attest` reverts at `h = 0`. `vote` reverts at identity
-  0, at c > k and on value. `amend()` reverts when the WEIGHT sum is 0.
+  0, at c > k and on value. `amend()` reverts when the WEIGHT sum is below
+  the quorum q (the def `quorum`; absent: 1, so a sum of 0).
   Identity 0 is no
   identity: the registry keeps `h + 1`, so the word 0 means that the
   wallet has no identity (O5b).

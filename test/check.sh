@@ -215,7 +215,8 @@ restrict 2 d,a,d,a,d,a,d,a,d,a,d,a,d,a,d,a d,u4,d,u4,d,u4,d,u4,d,u4,d,u4,d,u4,d,
 waterfall pp pr rr
 issuers 1:1 2:1
 name Arrow-Debreu
-symbol AD" data "$programs/arrow-debreu.lang"
+symbol AD
+quorum 6" data "$programs/arrow-debreu.lang"
 expect "data of arrow-debreu-token" 0 "start 2
 charters 3
 genesis 4096:1:0:5:1 4097:2:3:3:1 4098:2:3:2:1
@@ -266,6 +267,23 @@ refuse "facade erc721 with asset token is CONTRACT_VALUE" CONTRACT_VALUE facade 
 printf 'def members : Nat := 1\ndef facade : Facade := erc721\ndef genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 1 classA hnil\n' > "$out/facade-impossibility.lang"
 refuse "facade erc721 at impossibility is CONTRACT_VALUE" CONTRACT_VALUE facade \
   "is erc721 and the regime is impossibility" data "$out/facade-impossibility.lang"
+# The quorum (O2b B2, MY CALL 238 (a)): 1 <= q <= S, at Arrow-Debreu only.
+# The q = 0 and q > S programs are at Arrow-Debreu with S = 1, so that only
+# those two checks refuse them (MY CALL 252 (a)).
+cat > "$out/quorum-debreu.lang" <<'EOF'
+def members : Nat := 1
+def F : ChoiceRule := fun (x : Config) => open
+def agg : Aggregation F := mkAgg F (fun (t : Tally) => open) (fun (x : Config) => reflDec open)
+def genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 1 classA hnil
+EOF
+{ cat "$out/quorum-debreu.lang"; printf 'def quorum : Nat := 0\n'; } > "$out/quorum-0.lang"
+refuse "a quorum of 0 is QUORUM_LIMIT" QUORUM_LIMIT quorum "is 0" data "$out/quorum-0.lang"
+{ cat "$out/quorum-debreu.lang"; printf 'def quorum : Nat := 2\n'; } > "$out/quorum-above.lang"
+refuse "a quorum above the supply is QUORUM_LIMIT" QUORUM_LIMIT quorum \
+  "is above the supply S" data "$out/quorum-above.lang"
+printf 'def members : Nat := 1\ndef genesis : Holders := hrow 4096 1 (tuple (domestic, retail)) 1 classA hnil\ndef quorum : Nat := 1\n' > "$out/quorum-impossibility.lang"
+refuse "a quorum at impossibility is QUORUM_LIMIT" QUORUM_LIMIT quorum \
+  "is a def and the regime is impossibility" data "$out/quorum-impossibility.lang"
 
 # Each append of a list to itself doubles it; the evaluation of the long
 # appends nests past the depth cap, and the run stops with TYPE_FUEL.

@@ -1117,12 +1117,26 @@ static unsigned remainder_at(unsigned j) { return MEM_SEAT + WORD * (j - 1); }
 
 static unsigned floor_at(unsigned k, unsigned j) { return MEM_SEAT + WORD * (k + j - 1); }
 
-/* amend() (O2, MY CALLs 184 and 185): the n = members seats of the
- * weighted tally w = WEIGHT[1 .. k], W = the sum, by the largest remainder
- * (Hamilton): code j gets floor(n w_j / W) seats, and the seats left go one
- * each to the codes with the largest n w_j mod W, ties to the lower code
- * (code j gets one when fewer than the seats left rank above it). W = 0
- * reverts. The seat tally sums to n, so its table index (table_index:
+/* W -> W; reverts when W < q (O2b, MY CALL 238 (a)). At q = 1 these are
+ * the O2 bytes DUP1 ISZERO (W = 0 reverts), so a program with no def
+ * quorum keeps its code and its gas. */
+static void quorum_guard(Asm *a, unsigned long long q) {
+  asm_op(a, OP_DUP1);
+  if (q > 1) {
+    asm_push(a, q);
+    asm_op(a, OP_GT);
+  } else {
+    asm_op(a, OP_ISZERO);
+  }
+  asm_revert_if(a);
+}
+
+/* amend() (O2, MY CALLs 184 and 185; O2b MY CALL 238): the n = members
+ * seats of the weighted tally w = WEIGHT[1 .. k], W = the sum, by the largest
+ * remainder (Hamilton): code j gets floor(n w_j / W) seats, and the seats
+ * left go one each to the codes with the largest n w_j mod W, ties to the
+ * lower code (code j gets one when fewer than the seats left rank above it).
+ * W < q reverts (quorum_guard; q = 1 without data). The seat tally sums to n, so its table index (table_index:
  * the sum of seats_j (n + 1)^(j - 1) over j < k) reads the verdict table
  * of KL1 (asm_verdict). CHARTER := the code; returns it. n w_j < 2^75 (the
  * KL4 range), so plain MUL. The core amend (the packed table word) is not
@@ -1139,9 +1153,7 @@ static void amend(Asm *a, const EntryContext *c) {
     asm_store(a, remainder_at(j));
     asm_op(a, OP_ADD);
   }
-  asm_op(a, OP_DUP1);
-  asm_op(a, OP_ISZERO);
-  asm_revert_if(a);
+  quorum_guard(a, c->data != NULL ? c->data->quorum : 1);
   asm_push(a, n);
   for (unsigned j = 1; j <= k; j++) {
     asm_load(a, remainder_at(j));
@@ -1985,8 +1997,8 @@ static const char *cap_text(LangCap cap, char *buf, size_t size) {
  * group of 16 caps per charter, profile pairs row-major), waterfall (one
  * group per charter: p pass, r retain, for rent then sale), issuers c:h,
  * name and symbol (O5c), then `asset token` in token mode only (no line
- * for wei, MY CALL 155), then `facade erc721` at erc721 only (MY CALL 213).
- * DATA is not NULL (lang_domain_read). */
+ * for wei, MY CALL 155), then `facade erc721` at erc721 only (MY CALL 213),
+ * then `quorum q` when q is not 1 (O2b). DATA is not NULL (lang_domain_read). */
 void lang_domain_print(const LangDomainData *data, FILE *out) {
   fprintf(out, "start %u\ncharters %u\ngenesis", data->start, data->charters);
   for (size_t i = 0; i < data->holders; i++)
@@ -2012,4 +2024,6 @@ void lang_domain_print(const LangDomainData *data, FILE *out) {
     fputs("asset token\n", out);
   if (data->facade == LANG_FACADE_ERC721)
     fputs("facade erc721\n", out);
+  if (data->quorum != 1)
+    fprintf(out, "quorum %llu\n", data->quorum);
 }
